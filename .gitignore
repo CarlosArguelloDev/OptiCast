@@ -1,0 +1,53 @@
+# ─────────────────────────────
+# Entorno virtual
+# ─────────────────────────────
+venv/
+ENV/
+env/
+
+# ─────────────────────────────
+# Archivos de Python
+# ─────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+
+# ─────────────────────────────
+# Archivos de configuración locales
+# ─────────────────────────────
+*.env
+*.ini
+*.cfg
+*.local
+*.log
+
+# ─────────────────────────────
+# Archivos de Flask
+# ─────────────────────────────
+instance/
+.flaskenv
+
+# ─────────────────────────────
+# Archivos de tu proyecto
+# ─────────────────────────────
+static/*
+!static/.gitkeep
+
+
+templates/__pycache__/
+
+# ─────────────────────────────
+# Archivos de editor/IDE
+# ─────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─────────────────────────────
+# Archivos del sistema
+# ─────────────────────────────
+.DS_Store
+Thumbs.db
