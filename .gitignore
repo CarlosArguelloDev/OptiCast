@@ -34,8 +34,6 @@ instance/
 # ─────────────────────────────
 static/*
 !static/.gitkeep
-
-
 templates/__pycache__/
 
 # ─────────────────────────────
