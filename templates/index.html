@@ -3,13 +3,16 @@
 <head>
     <meta charset="utf-8">
     <title>Carrusel</title>
+
     <style>
         body {
             margin: 0;
             background: black;
             overflow: hidden;
         }
-        #viewer {
+
+        #viewer,
+        #video {
             width: 100vw;
             height: 100vh;
             object-fit: contain;
@@ -18,33 +21,74 @@
 </head>
 <body>
 
-    <div id="container">
-        <img id="viewer" src="" style="display:none;">
-        <video id="video" width="100%" height="100%" style="display:none;" autoplay muted></video>
-    </div>
+    <img id="viewer" src="" style="display:none;">
+    <video id="video"
+           style="display:none;"
+           autoplay
+           muted
+           preload="auto">
+    </video>
 
     <script>
         const media = {{ media|tojson }};
         let index = 0;
 
-        function showNext() {
-            const file = media[index];
-            const img = document.getElementById("viewer");
-            const vid = document.getElementById("video");
+        const img = document.getElementById("viewer");
+        const vid = document.getElementById("video");
 
-            if (file.endsWith(".mp4") || file.endsWith(".webm")) {
+        // Precargar imágenes
+        media.forEach(file => {
+            const ext = file.toLowerCase();
+
+            if (
+                ext.endsWith(".jpg") ||
+                ext.endsWith(".jpeg") ||
+                ext.endsWith(".png") ||
+                ext.endsWith(".gif")
+            ) {
+                const preload = new Image();
+                preload.src = "/static/" + file;
+            }
+        });
+
+        function showNext() {
+
+            const file = media[index];
+            const ext = file.toLowerCase();
+
+            if (ext.endsWith(".mp4") || ext.endsWith(".webm")) {
+
                 img.style.display = "none";
+
                 vid.style.display = "block";
                 vid.src = "/static/" + file;
-                vid.play();
+
+                vid.load();
+
+                vid.play().catch(err => {
+                    console.error(err);
+                });
 
                 vid.onended = () => {
+
+                    // Liberar memoria
+                    vid.pause();
+                    vid.removeAttribute("src");
+                    vid.load();
+
                     index = (index + 1) % media.length;
                     showNext();
                 };
 
             } else {
+
+                // Liberar video anterior
+                vid.pause();
+                vid.removeAttribute("src");
+                vid.load();
+
                 vid.style.display = "none";
+
                 img.style.display = "block";
                 img.src = "/static/" + file;
 
@@ -56,6 +100,7 @@
         }
 
         showNext();
+
     </script>
 
 </body>
