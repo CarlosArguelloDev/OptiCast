@@ -36,6 +36,11 @@
         const img = document.getElementById("viewer");
         const vid = document.getElementById("video");
 
+        // Recargar página cada 30 minutos
+        setInterval(() => {
+            location.reload();
+        }, 1800000);
+
         // Precargar imágenes
         media.forEach(file => {
             const ext = file.toLowerCase();
