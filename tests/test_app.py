@@ -28,6 +28,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.headers["Cache-Control"], "no-store")
         self.assertEqual([m["file"] for m in first.json["media"]], ["screen/a.mp4", "screen/b.jpg"])
+        self.assertEqual([m["size"] for m in first.json["media"]], [5, 5])
         etag = first.headers["ETag"]
         unchanged = self.client.get("/api/pantallas/screen/media", headers={"If-None-Match": etag})
         self.assertEqual(unchanged.status_code, 304)
@@ -50,6 +51,8 @@ class ManifestTests(unittest.TestCase):
         self.assertIn("/api/pantallas/screen/media", page.text)
         self.assertIn("function poll()", page.text)
         self.assertNotIn("location.reload", page.text)
+        self.assertIn("function createCarouselCache", page.text)
+        self.assertIn('id="offline-status"', page.text)
 
     def test_version_changes_with_timestamp_even_for_same_size(self):
         file = self.screen / "a.jpg"

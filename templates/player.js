@@ -19,6 +19,23 @@
     var queuedMedia = null;
     var manifestVersion = carouselVersion;
     var pollFailures = 0;
+    var cacheMessage = 'Preparando almacenamiento';
+    var cacheCount = 0;
+    var offlineStatus = document.getElementById('offline-status');
+    function showCacheStatus() {
+        if (/[?&]estado=1(?:&|$)/.test(location.search || '')) {
+            offlineStatus.style.display = 'block';
+            offlineStatus.textContent = (pollFailures ? 'Servidor no disponible. ' : '') +
+                cacheMessage + ': ' + cacheCount + ' archivos';
+        }
+    }
+    var cache = createCarouselCache(carouselManifestUrl, function (message, count) {
+        cacheMessage = message;
+        cacheCount = count;
+        showCacheStatus();
+    });
+    cache.sync(media);
+    showCacheStatus();
 
     // Consultas pequeñas y secuenciales; nunca se recarga la página.
     function poll() {
@@ -32,6 +49,8 @@
             xhr.onload = xhr.onerror = xhr.onabort = null;
             if (ok) pollFailures = 0;
             else pollFailures = Math.min(pollFailures + 1, 5);
+            if (ok) cache.sync(queuedMedia || media);
+            showCacheStatus();
             setTimeout(poll, ok ? 60000 : Math.min(30000 * Math.pow(2, pollFailures - 1), 300000));
         }
         xhr.onload = function () {
@@ -84,6 +103,8 @@
         slot.video.pause();
         slot.video.removeAttribute('src');
         slot.video.load();
+        cache.revoke(slot.objectUrl);
+        slot.objectUrl = null;
     }
 
     function fail(item, reason) {
@@ -156,6 +177,15 @@
         if (!media.length || pending) return;
         var slot = slots[active && active.slot === slots[0] ? 1 : 0];
         var entry = media[index];
+        // Durante un corte, circular solo por las copias completas disponibles.
+        // Si no hay ninguna, conservar la recuperación habitual de la fase 1.
+        if (pollFailures && cache.ready && cache.count) {
+            for (var attempt = 0; attempt < media.length; attempt++) {
+                entry = media[index];
+                if (cache.has(entry)) break;
+                index = (index + 1) % media.length;
+            }
+        }
         var file = entry.file;
         index = (index + 1) % media.length;
         var isVideo = /\.(mp4|webm)$/i.test(file);
@@ -170,16 +200,32 @@
             activate(item);
         }
         item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
-        item.element.onerror = function () { fail(item, 'archivo o conexión'); };
+        item.element.onerror = function () {
+            if (pending !== item) return;
+            if (slot.objectUrl) {
+                cache.reject(entry);
+                cache.revoke(slot.objectUrl);
+                slot.objectUrl = null;
+                item.ready = item.starting = false;
+                clearTimeout(item.timeout);
+                item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
+                item.element.src = url(file, entry.version);
+                if (isVideo) item.element.load();
+            } else fail(item, 'archivo o conexión');
+        };
         if (isVideo) {
             item.element.muted = true;
             item.element.onloadedmetadata = ready;
-            item.element.src = url(file, entry.version);
-            item.element.load();
         } else {
             item.element.onload = ready;
-            item.element.src = url(file, entry.version);
         }
+        cache.resolve(entry, function (objectUrl) {
+            // Una lectura vieja no debe alterar un elemento ya reutilizado.
+            if (pending !== item) { cache.revoke(objectUrl); return; }
+            slot.objectUrl = objectUrl;
+            item.element.src = objectUrl || url(file, entry.version);
+            if (isVideo) item.element.load();
+        });
     }
 
     function advance() {

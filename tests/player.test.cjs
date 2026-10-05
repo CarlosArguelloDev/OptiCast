@@ -16,7 +16,7 @@ function player(media, options = {}) {
     FakeXHR.prototype.setRequestHeader = function (name, value) { this.etag = value; };
     FakeXHR.prototype.send = function () {};
     FakeXHR.prototype.abort = function () { this.aborted = true; };
-    for (const id of ['status', 'image0', 'image1', 'video0', 'video1']) {
+    for (const id of ['status', 'offline-status', 'image0', 'image1', 'video0', 'video1']) {
         elements[id] = {
             style: {}, currentTime: 0, src: '',
             removeAttribute(name) { delete this[name]; },
@@ -37,6 +37,10 @@ function player(media, options = {}) {
         carouselMedia: media.map(file => ({ file, version: '1' })),
         carouselVersion: 'initial', carouselManifestUrl: '/api/pantallas/screen/media',
         XMLHttpRequest: FakeXHR,
+        createCarouselCache: options.cacheFactory || (() => ({
+            ready: false, count: 0, sync() {}, reject() {}, has() { return false; },
+            resolve(entry, done) { done(null); }, revoke() {}
+        })),
         document: { getElementById: id => elements[id] },
         console: { warn() {} }, location: { reload() { reloads++; } },
         Date: { now: () => now },
@@ -234,4 +238,65 @@ test('Carpeta inicialmente vacía empieza al recibir archivos', () => {
     assert.equal(p.elements.image0.src, '/static/new.jpg?v=2');
     p.event('image0', 'onload');
     assert.equal(p.elements.image0.style.visibility, 'visible');
+});
+
+test('Copias locales se reproducen y sus URLs se liberan al cambiar', () => {
+    const revoked = [];
+    const p = player(['a.jpg', 'b.jpg'], { cacheFactory: () => ({
+        ready: true, count: 2, sync() {}, reject() {}, has() { return true; },
+        resolve(entry, done) { done('blob:' + entry.file); },
+        revoke(url) { if (url) revoked.push(url); }
+    }) });
+    assert.equal(p.elements.image0.src, 'blob:a.jpg');
+    p.event('image0', 'onload');
+    p.event('image1', 'onload');
+    p.tick(5000);
+    assert.equal(p.elements.image1.style.visibility, 'visible');
+    assert.deepEqual(revoked, ['blob:a.jpg']);
+});
+
+test('Sin conexión salta archivos no guardados y sigue con la copia local', () => {
+    const p = player(['cached.jpg', 'missing.jpg'], { cacheFactory: () => ({
+        ready: true, count: 1, sync() {}, reject() {}, has(entry) { return entry.file === 'cached.jpg'; },
+        resolve(entry, done) { done(entry.file === 'cached.jpg' ? 'blob:cached' : null); },
+        revoke() {}
+    }) });
+    p.event('image0', 'onload');
+    p.tick(70000); // Primera consulta agotada: conexión no disponible.
+    p.event('image1', 'onerror');
+    p.tick(120000); // Incluye una vuelta de fallos y su espera.
+    assert.equal(p.elements.image1.src, 'blob:cached');
+    p.event('image1', 'onload');
+    assert.equal(p.elements.image0.src, 'blob:cached');
+});
+
+test('Lecturas locales tardías se descartan y revocan su URL', () => {
+    const callbacks = [];
+    const revoked = [];
+    const p = player(['a.jpg', 'b.jpg'], { cacheFactory: () => ({
+        ready: true, count: 2, sync() {}, reject() {}, has() { return true; },
+        resolve(entry, done) { callbacks.push(done); },
+        revoke(url) { if (url) revoked.push(url); }
+    }) });
+    p.tick(21000);
+    callbacks[0]('blob:stale');
+    assert.deepEqual(revoked, ['blob:stale']);
+    callbacks[1]('blob:current');
+    assert.equal(p.elements.image0.src, 'blob:current');
+});
+
+test('Copia local no reproducible intenta el archivo por red una vez', () => {
+    const rejected = [], revoked = [];
+    const p = player(['a.jpg'], { cacheFactory: () => ({
+        ready: true, count: 1, sync() {}, has() { return true; },
+        reject(entry) { rejected.push(entry.file); },
+        resolve(entry, done) { done('blob:bad'); },
+        revoke(url) { if (url) revoked.push(url); }
+    }) });
+    p.event('image0', 'onerror');
+    assert.equal(p.elements.image0.src, '/static/a.jpg?v=1');
+    assert.deepEqual(rejected, ['a.jpg']);
+    assert.deepEqual(revoked, ['blob:bad']);
+    p.event('image0', 'onerror');
+    assert.equal(p.elements.image0.src, undefined);
 });

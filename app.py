@@ -27,6 +27,7 @@ def manifest_for(pantalla):
             # Puede desaparecer mientras se actualiza la carpeta.
             continue
         media.append({"file": f"{pantalla}/{nombre}",
+                      "size": stat.st_size,
                       "version": f"{stat.st_mtime_ns:x}-{stat.st_size:x}"})
     version = hashlib.sha256(json.dumps(media, sort_keys=True).encode()).hexdigest()
     return {"media": media, "version": version}
