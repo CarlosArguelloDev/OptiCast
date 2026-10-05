@@ -19,6 +19,11 @@
     var queuedMedia = null;
     var manifestVersion = carouselVersion;
     var pollFailures = 0;
+    var schedule = createScheduleEngine(carouselScheduleConfig);
+    var currentNotice = null;
+    var programs = carouselScheduleConfig.schedules || [];
+    var overrideEntry = null;
+    var resumeIndex = 0;
     var cacheMessage = 'Preparando almacenamiento';
     var cacheCount = 0;
     var offlineStatus = document.getElementById('offline-status');
@@ -34,7 +39,19 @@
         cacheCount = count;
         showCacheStatus();
     });
-    cache.sync(media);
+    function cacheList() {
+        var list = [];
+        var seen = {};
+        // Reservar primero espacio para avisos, incluido Ley Silla.
+        programs.slice().sort(function (a, b) { return (b.priority || 10) - (a.priority || 10); }).forEach(function (p) {
+            if (!seen[p.media.file]) { list.push(p.media); seen[p.media.file] = true; }
+        });
+        (queuedMedia || media).forEach(function (entry) {
+            if (!seen[entry.file]) { list.push(entry); seen[entry.file] = true; }
+        });
+        return list;
+    }
+    cache.sync(cacheList());
     showCacheStatus();
 
     // Consultas pequeñas y secuenciales; nunca se recarga la página.
@@ -49,7 +66,7 @@
             xhr.onload = xhr.onerror = xhr.onabort = null;
             if (ok) pollFailures = 0;
             else pollFailures = Math.min(pollFailures + 1, 5);
-            if (ok) cache.sync(queuedMedia || media);
+            if (ok) cache.sync(cacheList());
             showCacheStatus();
             setTimeout(poll, ok ? 60000 : Math.min(30000 * Math.pow(2, pollFailures - 1), 300000));
         }
@@ -68,8 +85,10 @@
                         throw new Error('Archivo inválido');
                     }
                 }
+                schedule.update(data);
+                if (Array.isArray(data.schedules)) programs = data.schedules;
                 // Una carpeta vacía durante una actualización no borra la pantalla.
-                if (data.media.length && data.version !== manifestVersion) {
+                if ((data.media.length || data.schedules) && data.version !== manifestVersion) {
                     queuedMedia = data.media;
                     manifestVersion = data.version;
                     if (!active || active.transitioning) advance();
@@ -90,7 +109,8 @@
     }
     setTimeout(poll, 60000);
 
-    function url(file, version) {
+    function url(file, version, entry) {
+        if (entry && entry.url) return entry.url + (entry.url.indexOf('?') === -1 ? '?' : '&') + 'v=' + encodeURIComponent(version);
         return '/static/' + file.split('/').map(encodeURIComponent).join('/') + '?v=' + encodeURIComponent(version);
     }
 
@@ -151,10 +171,10 @@
                 if (active === item) advance();
             };
         } else {
-            advanceTimer = setTimeout(advance, IMAGE_MS);
+            advanceTimer = setTimeout(advance, item.notice ? Math.max(1, item.notice.until - Date.now()) : (item.seconds || IMAGE_MS / 1000) * 1000);
         }
         // Solo se prepara el siguiente archivo; nunca la lista completa.
-        prepare(false);
+        if (!currentNotice) prepare(false);
     }
 
     function activate(item) {
@@ -174,24 +194,28 @@
     }
 
     function prepare(due) {
-        if (!media.length || pending) return;
+        if (pending) return;
+        var available = media.concat(schedule.evaluate().normal);
+        if (!available.length && !overrideEntry) return;
+        index = available.length ? index % available.length : 0;
         var slot = slots[active && active.slot === slots[0] ? 1 : 0];
-        var entry = media[index];
+        var entry = overrideEntry || available[index];
         // Durante un corte, circular solo por las copias completas disponibles.
         // Si no hay ninguna, conservar la recuperación habitual de la fase 1.
-        if (pollFailures && cache.ready && cache.count) {
-            for (var attempt = 0; attempt < media.length; attempt++) {
-                entry = media[index];
+        if (!overrideEntry && pollFailures && cache.ready && cache.count) {
+            for (var attempt = 0; attempt < available.length; attempt++) {
+                entry = available[index];
                 if (cache.has(entry)) break;
-                index = (index + 1) % media.length;
+                index = (index + 1) % available.length;
             }
         }
         var file = entry.file;
-        index = (index + 1) % media.length;
+        if (!overrideEntry) index = (index + 1) % available.length;
         var isVideo = /\.(mp4|webm)$/i.test(file);
         var item = { slot: slot, file: file, isVideo: isVideo,
                      element: isVideo ? slot.video : slot.image,
-                     due: due, ready: false, starting: false };
+                     due: due, ready: false, starting: false,
+                     seconds: entry.seconds, notice: currentNotice, windowUntil: entry.windowUntil };
         pending = item;
         function ready() {
             if (pending !== item || item.ready) return;
@@ -209,7 +233,7 @@
                 item.ready = item.starting = false;
                 clearTimeout(item.timeout);
                 item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
-                item.element.src = url(file, entry.version);
+                item.element.src = url(file, entry.version, entry);
                 if (isVideo) item.element.load();
             } else fail(item, 'archivo o conexión');
         };
@@ -223,7 +247,7 @@
             // Una lectura vieja no debe alterar un elemento ya reutilizado.
             if (pending !== item) { cache.revoke(objectUrl); return; }
             slot.objectUrl = objectUrl;
-            item.element.src = objectUrl || url(file, entry.version);
+            item.element.src = objectUrl || url(file, entry.version, entry);
             if (isVideo) item.element.load();
         });
     }
@@ -257,6 +281,57 @@
         if (pending) { pending.due = true; activate(pending); }
         else if (!retryTimer) prepare(true);
     }
+
+    function cancelPrepared() {
+        if (pending) {
+            var old = pending;
+            pending = null;
+            clearTimeout(old.timeout);
+            release(old.slot);
+        }
+        clearTimeout(retryTimer);
+        retryTimer = null;
+        clearTimeout(advanceTimer);
+    }
+
+    setInterval(function () {
+        var nextNotice = schedule.evaluate().notice;
+        if (!nextNotice && !currentNotice) {
+            if (pending && pending.windowUntil && Date.now() >= pending.windowUntil) {
+                var expired = pending;
+                pending = null;
+                clearTimeout(expired.timeout);
+                release(expired.slot);
+                prepare(!!(active && active.transitioning));
+            }
+            if (active && active.windowUntil && Date.now() >= active.windowUntil && !active.transitioning) {
+                cancelPrepared();
+                active.transitioning = true;
+                if (active.isVideo) active.element.pause();
+                prepare(true);
+            }
+        }
+        if ((nextNotice && nextNotice.id) === (currentNotice && currentNotice.id)) {
+            if ((!active || active.transitioning) && !pending && !retryTimer) prepare(true);
+            return;
+        }
+        if (nextNotice && !currentNotice) {
+            resumeIndex = index;
+            if (active) {
+                for (var n = 0; n < media.length; n++) {
+                    if (media[n].file === active.file) { resumeIndex = (n + 1) % media.length; break; }
+                }
+            }
+        } else if (!nextNotice) index = resumeIndex;
+        cancelPrepared();
+        if (active) {
+            active.transitioning = true;
+            if (active.isVideo) active.element.pause();
+        }
+        currentNotice = nextNotice;
+        overrideEntry = nextNotice ? nextNotice.media : null;
+        prepare(true);
+    }, 1000);
 
     setInterval(function () {
         if (!active || !active.isVideo || active.transitioning) return;

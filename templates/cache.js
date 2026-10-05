@@ -49,6 +49,7 @@ function createCarouselCache(name, report) {
         } catch (error) { finish(false); }
     }
     function source(entry) {
+        if (entry.url) return entry.url + (entry.url.indexOf('?') === -1 ? '?' : '&') + 'v=' + encodeURIComponent(entry.version);
         return '/static/' + entry.file.split('/').map(encodeURIComponent).join('/') +
                '?v=' + encodeURIComponent(entry.version);
     }

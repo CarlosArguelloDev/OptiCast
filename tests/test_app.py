@@ -10,6 +10,8 @@ class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.original_static = app.static_folder
+        self.original_data = app.config.get("DATA_DIR")
+        app.config["DATA_DIR"] = self.directory.name
         app.static_folder = self.directory.name
         self.screen = Path(self.directory.name) / "screen"
         self.screen.mkdir()
@@ -17,6 +19,10 @@ class ManifestTests(unittest.TestCase):
 
     def tearDown(self):
         app.static_folder = self.original_static
+        if self.original_data is None:
+            app.config.pop("DATA_DIR", None)
+        else:
+            app.config["DATA_DIR"] = self.original_data
         self.directory.cleanup()
 
     def test_changes_and_conditional_requests(self):

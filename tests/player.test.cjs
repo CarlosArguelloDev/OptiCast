@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../templates/player.js'), 'utf8');
+const scheduleSource = fs.readFileSync(require('node:path').join(__dirname, '../templates/schedule.js'), 'utf8');
 
 // Reloj y elementos simulados para verificar fallas sin esperar minutos.
 function player(media, options = {}) {
@@ -33,9 +34,10 @@ function player(media, options = {}) {
         timers.set(id, { fn, at: now + ms, repeat: repeat ? ms : 0 });
         return id;
     }
-    vm.runInNewContext(source, {
+    vm.runInNewContext(scheduleSource + '\n' + source, {
         carouselMedia: media.map(file => ({ file, version: '1' })),
         carouselVersion: 'initial', carouselManifestUrl: '/api/pantallas/screen/media',
+        carouselScheduleConfig: options.schedule || { schedules: [], server_time: 0, utc_offset: 0 },
         XMLHttpRequest: FakeXHR,
         createCarouselCache: options.cacheFactory || (() => ({
             ready: false, count: 0, sync() {}, reject() {}, has() { return false; },
@@ -43,7 +45,7 @@ function player(media, options = {}) {
         })),
         document: { getElementById: id => elements[id] },
         console: { warn() {} }, location: { reload() { reloads++; } },
-        Date: { now: () => now },
+        Date: class extends Date { static now() { return now; } },
         setTimeout: (fn, ms) => timer(fn, ms, false),
         setInterval: (fn, ms) => timer(fn, ms, true),
         clearTimeout: id => timers.delete(id)
@@ -299,4 +301,37 @@ test('Copia local no reproducible intenta el archivo por red una vez', () => {
     assert.deepEqual(revoked, ['blob:bad']);
     p.event('image0', 'onerror');
     assert.equal(p.elements.image0.src, undefined);
+});
+
+test('Aviso interrumpe video, conserva pantalla al cargar y vuelve al carrusel', () => {
+    const p = player(['a.mp4', 'b.jpg'], { schedule: {
+        server_time: Date.parse('2026-10-05T13:59:58Z'), utc_offset: -360,
+        schedules: [{ id: 'seat', mode: 'moment', start: '08:00', seconds: 10,
+            days: ['0'], media: { file: 'seat.jpg', version: '2', seconds: 5 }, priority: 100 }]
+    } });
+    p.event('video0', 'onloadedmetadata'); p.event('video0', 'onplaying');
+    p.tick(2000);
+    assert.equal(p.elements.video0.paused, true);
+    assert.equal(p.elements.video0.style.visibility, 'visible');
+    assert.equal(p.elements.image1.src, '/static/seat.jpg?v=2');
+    p.event('image1', 'onload');
+    assert.equal(p.elements.image1.style.visibility, 'visible');
+    p.tick(10000);
+    assert.notEqual(p.elements.image0.src, '/static/seat.jpg?v=2');
+    assert.equal(p.elements.image0.src, '/static/b.jpg?v=1');
+    p.event('image0', 'onload');
+    assert.equal(p.elements.image0.style.visibility, 'visible');
+});
+
+test('Intervalo expira sin reproducir una copia precargada fuera de hora', () => {
+    const p = player([], { schedule: {
+        server_time: Date.parse('2026-10-05T13:59:58Z'), utc_offset: -360,
+        schedules: [{ id: 'window', mode: 'window', start: '07:00', end: '08:00', seconds: 30,
+            days: ['0'], media: { file: 'window.jpg', version: '1' } }]
+    } });
+    p.tick(1000);
+    p.event('image0', 'onload');
+    assert.equal(p.elements.image1.src, '/static/window.jpg?v=1');
+    p.tick(1000);
+    assert.equal(p.elements.image1.src, undefined);
 });

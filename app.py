@@ -2,9 +2,12 @@ from flask import Flask, jsonify, make_response, render_template, request, url_f
 import hashlib
 import json
 import os
+import time
+from management import SCREENS, init_management, managed_manifest
 
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 86400
+init_management(app)
 
 def manifest_for(pantalla):
     # Solo carpetas directas de static; independiente del directorio de arranque.
@@ -12,10 +15,10 @@ def manifest_for(pantalla):
         return None
     ruta = os.path.join(app.static_folder, pantalla)
 
-    if not os.path.isdir(ruta):
+    if not os.path.isdir(ruta) and pantalla not in SCREENS:
         return None
     media = []
-    for nombre in sorted(os.listdir(ruta)):
+    for nombre in sorted(os.listdir(ruta)) if os.path.isdir(ruta) else []:
         if not nombre.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".mp4", ".webm")):
             continue
         archivo = os.path.join(ruta, nombre)
@@ -29,8 +32,11 @@ def manifest_for(pantalla):
         media.append({"file": f"{pantalla}/{nombre}",
                       "size": stat.st_size,
                       "version": f"{stat.st_mtime_ns:x}-{stat.st_size:x}"})
-    version = hashlib.sha256(json.dumps(media, sort_keys=True).encode()).hexdigest()
-    return {"media": media, "version": version}
+    managed = managed_manifest(pantalla) if pantalla in SCREENS else {"media": [], "schedules": [], "shifts": []}
+    manifest = {"media": media + managed["media"], "schedules": managed["schedules"], "shifts": managed["shifts"]}
+    version = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    manifest.update(version=version, server_time=int(time.time() * 1000), utc_offset=-360)
+    return manifest
 
 
 @app.route("/api/pantallas/<pantalla>/media")

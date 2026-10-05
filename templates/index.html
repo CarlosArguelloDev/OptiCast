@@ -25,7 +25,9 @@
         var carouselMedia = {{ manifest.media|tojson }};
         var carouselVersion = {{ manifest.version|tojson }};
         var carouselManifestUrl = {{ manifest_url|tojson }};
+        var carouselScheduleConfig = {{ manifest|tojson }};
         {% include 'cache.js' %}
+        {% include 'schedule.js' %}
         {% include 'player.js' %}
     </script>
 </body>
