@@ -1,112 +1,25 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
     <meta charset="utf-8">
     <title>Carrusel</title>
-
     <style>
-        body {
-            margin: 0;
-            background: black;
-            overflow: hidden;
-        }
-
-        #viewer,
-        #video {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-        }
+        body { margin: 0; background: black; overflow: hidden; }
+        .media { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+                 object-fit: contain; visibility: hidden; }
+        #status { color: white; font: 24px sans-serif; text-align: center;
+                  position: absolute; top: 45%; width: 100%; }
     </style>
 </head>
 <body>
-
-    <img id="viewer" src="" style="display:none;">
-    <video id="video"
-           style="display:none;"
-           autoplay
-           muted
-           preload="auto">
-    </video>
-
+    <div id="status" role="status">Cargando contenido…</div>
+    <img id="image0" class="media" alt="">
+    <video id="video0" class="media" muted playsinline preload="metadata"></video>
+    <img id="image1" class="media" alt="">
+    <video id="video1" class="media" muted playsinline preload="metadata"></video>
     <script>
-        const media = {{ media|tojson }};
-        let index = 0;
-
-        const img = document.getElementById("viewer");
-        const vid = document.getElementById("video");
-
-        // Recargar página cada 30 minutos
-        setInterval(() => {
-            location.reload();
-        }, 1800000);
-
-        // Precargar imágenes
-        media.forEach(file => {
-            const ext = file.toLowerCase();
-
-            if (
-                ext.endsWith(".jpg") ||
-                ext.endsWith(".jpeg") ||
-                ext.endsWith(".png") ||
-                ext.endsWith(".gif")
-            ) {
-                const preload = new Image();
-                preload.src = "/static/" + file;
-            }
-        });
-
-        function showNext() {
-
-            const file = media[index];
-            const ext = file.toLowerCase();
-
-            if (ext.endsWith(".mp4") || ext.endsWith(".webm")) {
-
-                img.style.display = "none";
-
-                vid.style.display = "block";
-                vid.src = "/static/" + file;
-
-                vid.load();
-
-                vid.play().catch(err => {
-                    console.error(err);
-                });
-
-                vid.onended = () => {
-
-                    // Liberar memoria
-                    vid.pause();
-                    vid.removeAttribute("src");
-                    vid.load();
-
-                    index = (index + 1) % media.length;
-                    showNext();
-                };
-
-            } else {
-
-                // Liberar video anterior
-                vid.pause();
-                vid.removeAttribute("src");
-                vid.load();
-
-                vid.style.display = "none";
-
-                img.style.display = "block";
-                img.src = "/static/" + file;
-
-                setTimeout(() => {
-                    index = (index + 1) % media.length;
-                    showNext();
-                }, 5000);
-            }
-        }
-
-        showNext();
-
+        var carouselMedia = {{ media|tojson }};
+        {% include 'player.js' %}
     </script>
-
 </body>
 </html>
