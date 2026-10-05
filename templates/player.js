@@ -16,12 +16,63 @@
     var retryRound = 0;
     var advanceTimer = null;
     var retryTimer = null;
+    var queuedMedia = null;
+    var manifestVersion = carouselVersion;
+    var pollFailures = 0;
 
-    // Se conserva por ahora; la fase 2 reemplazará esta recarga.
-    setInterval(function () { location.reload(); }, 1800000);
+    // Consultas pequeñas y secuenciales; nunca se recarga la página.
+    function poll() {
+        var xhr = new XMLHttpRequest();
+        var finished = false;
+        var timeout;
+        function complete(ok) {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timeout);
+            xhr.onload = xhr.onerror = xhr.onabort = null;
+            if (ok) pollFailures = 0;
+            else pollFailures = Math.min(pollFailures + 1, 5);
+            setTimeout(poll, ok ? 60000 : Math.min(30000 * Math.pow(2, pollFailures - 1), 300000));
+        }
+        xhr.onload = function () {
+            if (finished) return;
+            if (xhr.status === 304) { complete(true); return; }
+            if (xhr.status !== 200) { complete(false); return; }
+            try {
+                var data = JSON.parse(xhr.responseText);
+                if (!data || typeof data.version !== 'string' || !Array.isArray(data.media)) {
+                    throw new Error('Lista inválida');
+                }
+                for (var n = 0; n < data.media.length; n++) {
+                    var entry = data.media[n];
+                    if (!entry || typeof entry.file !== 'string' || typeof entry.version !== 'string') {
+                        throw new Error('Archivo inválido');
+                    }
+                }
+                // Una carpeta vacía durante una actualización no borra la pantalla.
+                if (data.media.length && data.version !== manifestVersion) {
+                    queuedMedia = data.media;
+                    manifestVersion = data.version;
+                    if (!active || active.transitioning) advance();
+                }
+                complete(true);
+            } catch (error) { complete(false); }
+        };
+        xhr.onerror = xhr.onabort = function () { complete(false); };
+        timeout = setTimeout(function () {
+            complete(false);
+            xhr.abort();
+        }, 10000);
+        try {
+            xhr.open('GET', carouselManifestUrl, true);
+            xhr.setRequestHeader('If-None-Match', '"' + manifestVersion + '"');
+            xhr.send();
+        } catch (error) { complete(false); }
+    }
+    setTimeout(poll, 60000);
 
-    function url(file) {
-        return '/static/' + file.split('/').map(encodeURIComponent).join('/');
+    function url(file, version) {
+        return '/static/' + file.split('/').map(encodeURIComponent).join('/') + '?v=' + encodeURIComponent(version);
     }
 
     function release(slot) {
@@ -104,7 +155,8 @@
     function prepare(due) {
         if (!media.length || pending) return;
         var slot = slots[active && active.slot === slots[0] ? 1 : 0];
-        var file = media[index];
+        var entry = media[index];
+        var file = entry.file;
         index = (index + 1) % media.length;
         var isVideo = /\.(mp4|webm)$/i.test(file);
         var item = { slot: slot, file: file, isVideo: isVideo,
@@ -122,17 +174,40 @@
         if (isVideo) {
             item.element.muted = true;
             item.element.onloadedmetadata = ready;
-            item.element.src = url(file);
+            item.element.src = url(file, entry.version);
             item.element.load();
         } else {
             item.element.onload = ready;
-            item.element.src = url(file);
+            item.element.src = url(file, entry.version);
         }
     }
 
     function advance() {
         clearTimeout(advanceTimer);
         if (active) active.transitioning = true;
+        if (queuedMedia) {
+            if (pending) {
+                var previous = pending;
+                pending = null;
+                clearTimeout(previous.timeout);
+                release(previous.slot);
+            }
+            clearTimeout(retryTimer);
+            retryTimer = null;
+            media = queuedMedia;
+            queuedMedia = null;
+            // Continuar después del archivo actual si todavía está en la lista.
+            index = 0;
+            if (active) {
+                for (var n = 0; n < media.length; n++) {
+                    if (media[n].file === active.file) {
+                        index = (n + 1) % media.length;
+                        break;
+                    }
+                }
+            }
+            failures = retryRound = 0;
+        }
         if (pending) { pending.due = true; activate(pending); }
         else if (!retryTimer) prepare(true);
     }

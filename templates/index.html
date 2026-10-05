@@ -18,7 +18,9 @@
     <img id="image1" class="media" alt="">
     <video id="video1" class="media" muted playsinline preload="metadata"></video>
     <script>
-        var carouselMedia = {{ media|tojson }};
+        var carouselMedia = {{ manifest.media|tojson }};
+        var carouselVersion = {{ manifest.version|tojson }};
+        var carouselManifestUrl = {{ manifest_url|tojson }};
         {% include 'player.js' %}
     </script>
 </body>

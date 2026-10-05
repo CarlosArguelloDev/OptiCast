@@ -9,6 +9,13 @@ function player(media, options = {}) {
     let now = 0, nextId = 1;
     const timers = new Map();
     const elements = {};
+    const requests = [];
+    let reloads = 0;
+    function FakeXHR() { requests.push(this); }
+    FakeXHR.prototype.open = function (method, url) { this.url = url; };
+    FakeXHR.prototype.setRequestHeader = function (name, value) { this.etag = value; };
+    FakeXHR.prototype.send = function () {};
+    FakeXHR.prototype.abort = function () { this.aborted = true; };
     for (const id of ['status', 'image0', 'image1', 'video0', 'video1']) {
         elements[id] = {
             style: {}, currentTime: 0, src: '',
@@ -27,9 +34,11 @@ function player(media, options = {}) {
         return id;
     }
     vm.runInNewContext(source, {
-        carouselMedia: media,
+        carouselMedia: media.map(file => ({ file, version: '1' })),
+        carouselVersion: 'initial', carouselManifestUrl: '/api/pantallas/screen/media',
+        XMLHttpRequest: FakeXHR,
         document: { getElementById: id => elements[id] },
-        console: { warn() {} }, location: { reload() {} },
+        console: { warn() {} }, location: { reload() { reloads++; } },
         Date: { now: () => now },
         setTimeout: (fn, ms) => timer(fn, ms, false),
         setInterval: (fn, ms) => timer(fn, ms, true),
@@ -37,6 +46,14 @@ function player(media, options = {}) {
     });
     return {
         elements,
+        requests,
+        get reloads() { return reloads; },
+        respond(status, body) {
+            const xhr = requests[requests.length - 1];
+            xhr.status = status;
+            xhr.responseText = typeof body === 'string' ? body : JSON.stringify(body);
+            if (xhr.onload) xhr.onload();
+        },
         event(id, name) { if (elements[id][name]) elements[id][name](); },
         tick(ms) {
             const until = now + ms;
@@ -61,14 +78,14 @@ test('Mantiene la imagen anterior hasta cargar la siguiente y libera recursos', 
     const p = player(['screen/a.jpg', 'screen/b.jpg', 'screen/c.jpg']);
     p.event('image0', 'onload');
     assert.equal(p.elements.image0.style.visibility, 'visible');
-    assert.equal(p.elements.image1.src, '/static/screen/b.jpg');
+    assert.equal(p.elements.image1.src, '/static/screen/b.jpg?v=1');
     assert.equal(p.elements.video0.src, '');
     p.tick(5000);
     assert.equal(p.elements.image0.style.visibility, 'visible');
     p.event('image1', 'onload');
     assert.equal(p.elements.image1.style.visibility, 'visible');
     assert.equal(p.elements.image0.style.visibility, 'hidden');
-    assert.equal(p.elements.image0.src, '/static/screen/c.jpg');
+    assert.equal(p.elements.image0.src, '/static/screen/c.jpg?v=1');
 });
 
 test('Carga agotada salta el archivo; un callback antiguo no cambia el nuevo', () => {
@@ -77,7 +94,7 @@ test('Carga agotada salta el archivo; un callback antiguo no cambia el nuevo', (
     p.tick(20000);
     assert.equal(p.elements.image0.src, undefined);
     p.tick(1000);
-    assert.equal(p.elements.image0.src, '/static/good.jpg');
+    assert.equal(p.elements.image0.src, '/static/good.jpg?v=1');
     oldLoad();
     assert.notEqual(p.elements.image0.style.visibility, 'visible');
     p.event('image0', 'onload');
@@ -103,7 +120,7 @@ test('Reproducción rechazada salta al siguiente archivo', () => {
     p.event('video0', 'onloadedmetadata');
     assert.equal(p.elements.video0.src, undefined);
     p.tick(1000);
-    assert.equal(p.elements.image0.src, '/static/b.jpg');
+    assert.equal(p.elements.image0.src, '/static/b.jpg?v=1');
     p.event('image0', 'onload');
     assert.equal(p.elements.image0.style.visibility, 'visible');
 });
@@ -115,7 +132,7 @@ test('Todas las cargas fallidas esperan 30, 60 y hasta 120 segundos', () => {
         p.tick(delay - 1);
         assert.equal(p.elements.image0.src, undefined);
         p.tick(1);
-        assert.equal(p.elements.image0.src, '/static/bad.jpg');
+        assert.equal(p.elements.image0.src, '/static/bad.jpg?v=1');
     }
 });
 
@@ -138,12 +155,83 @@ test('Video que nunca empieza también agota su espera', () => {
     p.tick(20000);
     assert.equal(p.elements.video0.src, undefined);
     p.tick(1000);
-    assert.equal(p.elements.image0.src, '/static/b.jpg');
+    assert.equal(p.elements.image0.src, '/static/b.jpg?v=1');
 });
 
 test('Lista vacía muestra un mensaje y nombres especiales se codifican', () => {
     const empty = player([]);
     assert.equal(empty.elements.status.textContent, 'No hay contenido disponible.');
     const p = player(['screen/aviso #1.jpg']);
-    assert.equal(p.elements.image0.src, '/static/screen/aviso%20%231.jpg');
+    assert.equal(p.elements.image0.src, '/static/screen/aviso%20%231.jpg?v=1');
+});
+
+test('Sin conexión no recarga, conserva el contenido y reintenta con pausas', () => {
+    const p = player(['a.jpg']);
+    p.event('image0', 'onload');
+    p.tick(60000);
+    assert.equal(p.requests.length, 1);
+    p.tick(10000);
+    assert.equal(p.requests[0].aborted, true);
+    assert.equal(p.elements.image0.style.visibility, 'visible');
+    p.tick(29999);
+    assert.equal(p.requests.length, 1);
+    p.tick(1);
+    assert.equal(p.requests.length, 2);
+    p.respond(503, '');
+    p.tick(59999);
+    assert.equal(p.requests.length, 2);
+    p.tick(1);
+    assert.equal(p.requests.length, 3);
+    p.respond(304, '');
+    p.tick(60000);
+    assert.equal(p.requests.length, 4);
+    p.tick(1800000);
+    assert.equal(p.reloads, 0);
+});
+
+test('Cambios durante un video se aplican al terminar sin quitarlo antes', () => {
+    const p = player(['a.mp4', 'old.jpg']);
+    p.event('video0', 'onloadedmetadata');
+    p.event('video0', 'onplaying');
+    p.event('image1', 'onload');
+    for (let i = 0; i < 60; i++) {
+        p.elements.video0.currentTime++;
+        p.tick(1000);
+    }
+    const oldCallback = p.elements.image1.onload;
+    p.respond(200, { version: 'new', media: [{ file: 'fresh.jpg', version: '2' }] });
+    assert.equal(p.elements.video0.style.visibility, 'visible');
+    assert.equal(p.elements.image1.src, '/static/old.jpg?v=1');
+    p.event('video0', 'onended');
+    assert.equal(p.elements.image1.src, '/static/fresh.jpg?v=2');
+    oldCallback();
+    assert.equal(p.elements.video0.style.visibility, 'visible');
+    p.event('image1', 'onload');
+    assert.equal(p.elements.image1.style.visibility, 'visible');
+    p.tick(60000);
+    assert.equal(p.requests[1].etag, '"new"');
+});
+
+test('Respuestas vacías o inválidas y 404 conservan la lista anterior', () => {
+    const p = player(['a.jpg']);
+    p.event('image0', 'onload');
+    p.tick(60000);
+    p.respond(200, { version: 'empty', media: [] });
+    assert.equal(p.elements.image0.style.visibility, 'visible');
+    p.tick(60000);
+    assert.equal(p.requests[1].etag, '"initial"');
+    p.respond(200, '<html>Error</html>');
+    p.tick(30000);
+    p.respond(404, '');
+    assert.equal(p.elements.image0.style.visibility, 'visible');
+    assert.equal(p.reloads, 0);
+});
+
+test('Carpeta inicialmente vacía empieza al recibir archivos', () => {
+    const p = player([]);
+    p.tick(60000);
+    p.respond(200, { version: 'new', media: [{ file: 'new.jpg', version: '2' }] });
+    assert.equal(p.elements.image0.src, '/static/new.jpg?v=2');
+    p.event('image0', 'onload');
+    assert.equal(p.elements.image0.style.visibility, 'visible');
 });
