@@ -2,6 +2,7 @@
 # Entorno virtual
 # ─────────────────────────────
 venv/
+.venv/
 ENV/
 env/
 
@@ -18,6 +19,7 @@ __pycache__/
 # Archivos de configuración locales
 # ─────────────────────────────
 *.env
+.env.*
 *.ini
 *.cfg
 *.local
@@ -29,12 +31,38 @@ __pycache__/
 instance/
 .flaskenv
 
+# Datos locales y copias de SQLite, aunque se guarden fuera de instance
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-*
+*.sqlite3-*
+*.db-*
+session.key
+uploads/
+backups/
+respaldos/
+
 # ─────────────────────────────
 # Archivos de tu proyecto
 # ─────────────────────────────
 static/*
 !static/.gitkeep
 templates/__pycache__/
+
+# Imágenes y videos cargados o usados como prueba
+# La imagen compartida incluida con el programa sí pertenece al repositorio
+*.[jJ][pP][gG]
+*.[jJ][pP][eE][gG]
+*.[pP][nN][gG]
+*.[gG][iI][fF]
+*.[wW][eE][bB][pP]
+*.[mM][pP]4
+*.[wW][eE][bB][mM]
+!assets/ley-silla.png
+
+# Manuales y otros documentos generados localmente
+entregables/
 
 # ─────────────────────────────
 # Archivos de editor/IDE
