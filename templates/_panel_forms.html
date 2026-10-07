@@ -1,0 +1,14 @@
+{% macro token(csrf) %}<input type="hidden" name="csrf" value="{{csrf}}">{% endmacro %}
+{% macro tvs(screens, selected=[]) %}
+<fieldset><legend>Televisiones</legend><div class="checks">{% for tv in screens %}<label><input type="checkbox" name="targets" value="{{tv.name}}" {% if tv.name in selected %}checked{% endif %}>{{tv.name}}</label>{% endfor %}</div></fieldset>
+{% endmacro %}
+{% macro days(weekdays, selected=[]) %}
+<fieldset><legend>Días</legend><div class="checks">{% for day in weekdays %}<label><input type="checkbox" name="days" value="{{loop.index0}}" {% if loop.index0|string in selected %}checked{% endif %}>{{day[:3]}}</label>{% endfor %}</div></fieldset>
+{% endmacro %}
+{% macro preview(asset) %}
+{% if asset.filename.lower().endswith(('.mp4','.webm')) %}<video class="preview" controls muted preload="none" src="{{url_for('panel.asset_file',asset_id=asset.id)}}"></video>{% else %}<img class="preview" loading="lazy" src="{{url_for('panel.asset_file',asset_id=asset.id)}}" alt="{{asset.name}}">{% endif %}
+{% endmacro %}
+{% macro duration(seconds=5) %}
+<div class="row"><div><label>Duración</label><input name="seconds" type="number" min="1" max="28800" value="{{seconds}}" required></div><div><label>Unidad</label><select name="unit"><option value="seconds">Segundos</option><option value="minutes">Minutos</option></select></div></div>
+{% endmacro %}
+

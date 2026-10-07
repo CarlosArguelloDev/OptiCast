@@ -44,7 +44,21 @@ def database():
             title TEXT NOT NULL, targets TEXT NOT NULL, days TEXT NOT NULL,
             start TEXT NOT NULL, end TEXT, seconds INTEGER NOT NULL,
             mode TEXT NOT NULL, shift_id INTEGER, enabled INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS carousel_items (
+            screen TEXT NOT NULL, asset TEXT NOT NULL, position INTEGER NOT NULL,
+            seconds INTEGER NOT NULL DEFAULT 5, PRIMARY KEY(screen, asset));
+        CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY);
         """)
+        # Importar una sola vez la publicación existente, conservando su orden.
+        if not g.db.execute("SELECT 1 FROM migrations WHERE name='carousel_items'").fetchone():
+            positions = {screen: 0 for screen in SCREENS}
+            for asset in g.db.execute("SELECT * FROM assets WHERE enabled=1 ORDER BY name,id").fetchall():
+                for screen in json.loads(asset["targets"]):
+                    if screen in positions:
+                        g.db.execute("INSERT OR IGNORE INTO carousel_items VALUES(?,?,?,?)",
+                                     (screen, asset["id"], positions[screen], asset["seconds"]))
+                        positions[screen] += 1
+            g.db.execute("INSERT INTO migrations VALUES('carousel_items')")
         if not g.db.execute("SELECT 1 FROM shifts").fetchone():
             g.db.executemany("INSERT INTO shifts(name,start,end,days) VALUES (?,?,?,?)", (
                 ("Turno 1 · por confirmar", "06:00", "14:00", "[]"),
@@ -141,7 +155,24 @@ def home(user):
     db = database()
     assets = db.execute("SELECT * FROM assets WHERE owner=? OR builtin=1 OR ?=1 ORDER BY name", (user["id"], user["admin"])).fetchall()
     schedules = db.execute("SELECT s.*, a.name AS asset_name FROM schedules s JOIN assets a ON a.id=s.asset WHERE s.owner=? OR ?=1 ORDER BY s.start", (user["id"], user["admin"])).fetchall()
+    view = request.args.get("view", "files")
+    if view not in ("files", "carousel", "scheduled", "settings"):
+        view = "files"
+    if view == "settings" and not user["admin"]:
+        abort(403)
+    screen = request.args.get("screen", SCREENS[0])
+    if screen not in SCREENS:
+        abort(404)
+    rows = db.execute("SELECT c.*,a.name,a.filename,a.owner,a.builtin FROM carousel_items c JOIN assets a ON a.id=c.asset WHERE c.screen=? ORDER BY c.position,c.asset", (screen,)).fetchall()
+    rows = [row for row in rows if asset_path(row).is_file()]
+    editable = [row["asset"] for row in rows if user["admin"] or row["owner"] == user["id"]]
+    legacy_root = Path(current_app.static_folder) / screen
+    legacy = [name for name in sorted(os.listdir(legacy_root))
+              if Path(name).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".webm")
+              and (legacy_root / name).is_file()] if legacy_root.is_dir() else []
     return render_template("panel.html", user=user, assets=assets, schedules=schedules,
+                           view=view, screen=screen, carousel=rows, editable=editable, legacy=legacy,
+                           selected_asset=request.args.get("asset", ""),
                            shifts=db.execute("SELECT * FROM shifts").fetchall(),
                            accounts=db.execute("SELECT id,name,username FROM accounts").fetchall() if user["admin"] else [],
                            screens=[{"name": n} for n in SCREENS],
@@ -162,21 +193,24 @@ def add_account(user):
         try:
             if database().execute("SELECT 1 FROM accounts WHERE name=?", (name,)).fetchone():
                 flash("Ese departamento ya tiene una cuenta.", "error")
-                return redirect(url_for("panel.home", _anchor="cuentas"))
+                return redirect(url_for("panel.home", view="settings", _anchor="cuentas"))
             database().execute("INSERT INTO accounts(name,username,password) VALUES(?,?,?)", (name, username, generate_password_hash(password)))
             database().commit()
             flash("Cuenta de departamento creada.", "success")
         except sqlite3.IntegrityError:
             flash("Ese usuario ya existe.", "error")
-    return redirect(url_for("panel.home", _anchor="cuentas"))
+    return redirect(url_for("panel.home", view="settings", _anchor="cuentas"))
 
 
 @panel.post("/panel/upload")
 @protected
 def upload(user):
+    if request.form.get("intent") == "scheduled" and request.form.get("source") == "existing":
+        return add_schedule.__wrapped__(user)
     try:
-        targets = selection("targets", SCREENS)
-        seconds = duration()
+        scheduled = request.form.get("intent") == "scheduled"
+        targets = selection("targets", SCREENS) if scheduled else "[]"
+        seconds = duration() if scheduled else 5
         file = request.files.get("file")
         if not file or not file.filename:
             raise ValueError("Selecciona un archivo.")
@@ -198,9 +232,9 @@ def upload(user):
             file.save(temp)
             os.replace(temp, destination)
             database().execute("INSERT INTO assets(id,owner,name,filename,targets,seconds,enabled) VALUES(?,?,?,?,?,?,?)",
-                               (asset_id, user["id"], request.form.get("name", "").strip()[:120] or original,
-                                filename, targets, seconds, int(request.form.get("mode", "normal") == "normal")))
-            if request.form.get("mode", "normal") != "normal":
+                               (asset_id, user["id"], (request.form.get("name", "").strip() or request.form.get("title", "").strip())[:120] or original,
+                                filename, targets, seconds, 0))
+            if scheduled:
                 insert_program(user, owned_asset(user, asset_id))
             database().commit()
         except Exception:
@@ -208,10 +242,68 @@ def upload(user):
             temp.unlink(missing_ok=True)
             destination.unlink(missing_ok=True)
             raise
-        flash("Archivo subido. Puedes asignarle un horario en Programación.", "success")
+        flash("Aviso guardado." if scheduled else "Archivo guardado en tu biblioteca.", "success")
     except ValueError as error:
         flash(str(error), "error")
-    return redirect(url_for("panel.home", _anchor="contenido"))
+    return redirect(url_for("panel.home", view="scheduled" if request.form.get("intent") == "scheduled" else "files"))
+
+
+@panel.post("/panel/carousel")
+@protected
+def add_carousel(user):
+    asset = owned_asset(user, request.form.get("asset"))
+    if asset["builtin"] and not user["admin"]:
+        abort(403)
+    try:
+        targets = json.loads(selection("targets", SCREENS))
+        seconds = duration()
+        db = database()
+        db.execute("BEGIN IMMEDIATE")
+        for screen in targets:
+            position = db.execute("SELECT COALESCE(MAX(position),-1)+1 FROM carousel_items WHERE screen=?", (screen,)).fetchone()[0]
+            db.execute("INSERT INTO carousel_items VALUES(?,?,?,?) ON CONFLICT(screen,asset) DO UPDATE SET seconds=excluded.seconds",
+                       (screen, asset["id"], position, seconds))
+        db.commit()
+        flash("Archivo agregado al carrusel.", "success")
+    except ValueError as error:
+        flash(str(error), "error")
+    return redirect(url_for("panel.home", view="carousel", screen=request.form.get("screen", SCREENS[0])))
+
+
+@panel.post("/panel/carousel/<screen>/<asset_id>")
+@protected
+def update_carousel(user, screen, asset_id):
+    if screen not in SCREENS:
+        abort(404)
+    owned_asset(user, asset_id)
+    db = database()
+    db.execute("BEGIN IMMEDIATE")
+    row = db.execute("SELECT c.*,a.owner FROM carousel_items c JOIN assets a ON a.id=c.asset WHERE c.screen=? AND c.asset=?", (screen, asset_id)).fetchone()
+    if not row or (not user["admin"] and row["owner"] != user["id"]):
+        abort(404)
+    action = request.form.get("action")
+    if action == "remove":
+        db.execute("DELETE FROM carousel_items WHERE screen=? AND asset=?", (screen, asset_id))
+        flash("Archivo retirado de esta TV. Sigue en tu biblioteca.", "success")
+    elif action in ("up", "down"):
+        # Reordenar únicamente los puestos propios; otros departamentos conservan sus puestos.
+        comparison, direction = ("<", "DESC") if action == "up" else (">", "ASC")
+        other = db.execute(f"SELECT c.asset,c.position FROM carousel_items c JOIN assets a ON a.id=c.asset WHERE c.screen=? AND c.position {comparison} ? AND (a.owner=? OR ?=1) ORDER BY c.position {direction},c.asset LIMIT 1",
+                           (screen, row["position"], user["id"], user["admin"])).fetchone()
+        if other:
+            db.execute("UPDATE carousel_items SET position=? WHERE screen=? AND asset=?", (other["position"], screen, asset_id))
+            db.execute("UPDATE carousel_items SET position=? WHERE screen=? AND asset=?", (row["position"], screen, other["asset"]))
+    elif action == "save":
+        try:
+            seconds = duration()
+            db.execute("UPDATE carousel_items SET seconds=? WHERE screen=? AND asset=?", (seconds, screen, asset_id))
+            flash("Duración guardada.", "success")
+        except ValueError as error:
+            flash(str(error), "error")
+    else:
+        abort(400)
+    db.commit()
+    return redirect(url_for("panel.home", view="carousel", screen=screen))
 
 
 @panel.post("/panel/assets/<asset_id>")
@@ -222,6 +314,7 @@ def update_asset(user, asset_id):
         abort(403)
     try:
         if request.form.get("action") == "delete":
+            database().execute("DELETE FROM carousel_items WHERE asset=?", (asset_id,))
             database().execute("DELETE FROM schedules WHERE asset=?", (asset_id,))
             database().execute("DELETE FROM assets WHERE id=?", (asset_id,))
             database().commit()
@@ -232,11 +325,16 @@ def update_asset(user, asset_id):
             seconds = number(request.form.get("seconds"), 1, 28800)
             database().execute("UPDATE assets SET targets=?,seconds=?,enabled=? WHERE id=?",
                                (targets, seconds, int(bool(request.form.get("enabled"))), asset_id))
+            database().execute("DELETE FROM carousel_items WHERE asset=?", (asset_id,))
+            if request.form.get("enabled"):
+                for screen in json.loads(targets):
+                    position = database().execute("SELECT COALESCE(MAX(position),-1)+1 FROM carousel_items WHERE screen=?", (screen,)).fetchone()[0]
+                    database().execute("INSERT INTO carousel_items VALUES(?,?,?,?)", (screen, asset_id, position, seconds))
             database().commit()
             flash("Contenido actualizado.", "success")
     except ValueError as error:
         flash(str(error), "error")
-    return redirect(url_for("panel.home", _anchor="contenido"))
+    return redirect(url_for("panel.home", view="files"))
 
 
 @panel.post("/panel/schedules")
@@ -246,10 +344,10 @@ def add_schedule(user):
         asset = owned_asset(user, request.form.get("asset"))
         insert_program(user, asset)
         database().commit()
-        flash("Programación creada. La duración es la que tú configuraste.", "success")
+        flash("Programación guardada.", "success")
     except ValueError as error:
         flash(str(error), "error")
-    return redirect(url_for("panel.home", _anchor="programacion"))
+    return redirect(url_for("panel.home", view="scheduled"))
 
 
 def duration():
@@ -304,7 +402,7 @@ def update_schedule(user, schedule_id):
     else:
         database().execute("UPDATE schedules SET enabled=? WHERE id=?", (int(not row["enabled"]), schedule_id))
     database().commit()
-    return redirect(url_for("panel.home", _anchor="programacion"))
+    return redirect(url_for("panel.home", view="scheduled"))
 
 
 @panel.post("/panel/shifts/<int:shift_id>")
@@ -324,7 +422,7 @@ def update_shift(user, shift_id):
         flash("Turno actualizado.", "success")
     except ValueError as error:
         flash(str(error), "error")
-    return redirect(url_for("panel.home", _anchor="turnos"))
+    return redirect(url_for("panel.home", view="settings", _anchor="turnos"))
 
 
 def asset_path(row):
@@ -342,7 +440,7 @@ def asset_file(asset_id):
     allowed = user and (user["admin"] or row["owner"] == user["id"] or row["builtin"])
     if not allowed:
         # Los archivos publicados en los carruseles se reproducen sin sesión ni clave.
-        assigned = row["enabled"] and bool(json.loads(row["targets"]))
+        assigned = database().execute("SELECT 1 FROM carousel_items WHERE asset=? LIMIT 1", (asset_id,)).fetchone()
         scheduled = database().execute("SELECT 1 FROM schedules WHERE asset=? AND enabled=1 LIMIT 1", (asset_id,)).fetchone()
         allowed = row["builtin"] or assigned or scheduled
     if not allowed:
@@ -370,8 +468,9 @@ def managed_manifest(screen):
                 "size": stat.st_size, "seconds": row["seconds"],
                 "url": url_for("panel.asset_file", asset_id=row["id"])}
         records[row["id"]] = item
-        if row["enabled"] and screen in json.loads(row["targets"]):
-            entries.append(item)
+    for row in db.execute("SELECT asset,seconds FROM carousel_items WHERE screen=? ORDER BY position,asset", (screen,)):
+        if row["asset"] in records:
+            entries.append({**records[row["asset"]], "seconds": row["seconds"]})
     for row in db.execute("SELECT * FROM schedules WHERE enabled=1 ORDER BY id"):
         if screen in json.loads(row["targets"]) and row["asset"] in records:
             programs.append({"id": row["id"], "media": records[row["asset"]], "days": json.loads(row["days"]),
