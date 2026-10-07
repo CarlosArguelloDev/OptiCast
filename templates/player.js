@@ -17,6 +17,7 @@
     var advanceTimer = null;
     var retryTimer = null;
     var queuedMedia = null;
+    var clearWhenEmpty = false;
     var manifestVersion = carouselVersion;
     var pollFailures = 0;
     var schedule = createScheduleEngine(carouselScheduleConfig);
@@ -87,6 +88,7 @@
                 }
                 schedule.update(data);
                 if (Array.isArray(data.schedules)) programs = data.schedules;
+                clearWhenEmpty = data.clear_when_empty === true;
                 // Una carpeta vacía durante una actualización no borra la pantalla.
                 if ((data.media.length || data.schedules) && data.version !== manifestVersion) {
                     queuedMedia = data.media;
@@ -196,7 +198,15 @@
     function prepare(due) {
         if (pending) return;
         var available = media.concat(schedule.evaluate().normal);
-        if (!available.length && !overrideEntry) return;
+        if (!available.length && !overrideEntry) {
+            if (due && clearWhenEmpty && active) {
+                release(active.slot);
+                active = null;
+                status.textContent = 'Sin contenido para esta pantalla.';
+                status.style.display = 'block';
+            }
+            return;
+        }
         index = available.length ? index % available.length : 0;
         var slot = slots[active && active.slot === slots[0] ? 1 : 0];
         var entry = overrideEntry || available[index];

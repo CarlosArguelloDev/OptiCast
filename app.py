@@ -35,7 +35,8 @@ def manifest_for(pantalla):
     managed = managed_manifest(pantalla) if pantalla in SCREENS else {"media": [], "schedules": [], "shifts": []}
     manifest = {"media": media + managed["media"], "schedules": managed["schedules"], "shifts": managed["shifts"]}
     version = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
-    manifest.update(version=version, server_time=int(time.time() * 1000), utc_offset=-360)
+    manifest.update(version=version, server_time=int(time.time() * 1000), utc_offset=-360,
+                    clear_when_empty=pantalla in SCREENS)
     return manifest
 
 

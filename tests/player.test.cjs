@@ -80,6 +80,23 @@ function player(media, options = {}) {
     };
 }
 
+test('Retirar el último archivo del panel deja de mostrarlo y luego acepta contenido nuevo', () => {
+    const p = player(['a.jpg']);
+    p.event('image0', 'onload');
+    p.tick(60000);
+    p.respond(200, {version: 'empty', media: [], schedules: [], clear_when_empty: true});
+    p.tick(5000);
+    assert.equal(p.elements.image0.style.visibility, 'hidden');
+    assert.equal(p.elements.image1.style.visibility, 'hidden');
+    assert.equal(p.elements.status.style.display, 'block');
+    assert.equal(p.elements.status.textContent, 'Sin contenido para esta pantalla.');
+    p.tick(55000);
+    p.respond(200, {version: 'new', media: [{file:'b.jpg',version:'1'}], schedules: [], clear_when_empty: true});
+    p.event('image0', 'onload');
+    assert.equal(p.elements.image0.style.visibility, 'visible');
+    assert.equal(p.elements.status.style.display, 'none');
+});
+
 test('Mantiene la imagen anterior hasta cargar la siguiente y libera recursos', () => {
     const p = player(['screen/a.jpg', 'screen/b.jpg', 'screen/c.jpg']);
     p.event('image0', 'onload');
