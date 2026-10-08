@@ -117,6 +117,8 @@
     }
 
     function release(slot) {
+        if (slot.cancelCacheWait) slot.cancelCacheWait();
+        slot.cancelCacheWait = null;
         slot.image.onload = slot.image.onerror = null;
         slot.video.onloadedmetadata = slot.video.onplaying = null;
         slot.video.onended = slot.video.onerror = null;
@@ -210,6 +212,8 @@
         index = available.length ? index % available.length : 0;
         var slot = slots[active && active.slot === slots[0] ? 1 : 0];
         var entry = overrideEntry || available[index];
+        // Un único archivo ya está reproduciéndose: no abrir otra copia en paralelo.
+        if (!due && !overrideEntry && available.length === 1 && active && active.isVideo && active.file === entry.file) return;
         // Durante un corte, circular solo por las copias completas disponibles.
         // Si no hay ninguna, conservar la recuperación habitual de la fase 1.
         if (!overrideEntry && pollFailures && cache.ready && cache.count) {
@@ -233,7 +237,8 @@
             item.ready = true;
             activate(item);
         }
-        item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
+        // El caché puede esperar una descarga de fondo y luego la del archivo solicitado.
+        item.timeout = setTimeout(function () { fail(item, 'almacenamiento agotado'); }, 210000);
         item.element.onerror = function () {
             if (pending !== item) return;
             if (slot.objectUrl) {
@@ -253,13 +258,15 @@
         } else {
             item.element.onload = ready;
         }
-        cache.resolve(entry, function (objectUrl) {
+        slot.cancelCacheWait = cache.resolve(entry, function (objectUrl) {
             // Una lectura vieja no debe alterar un elemento ya reutilizado.
             if (pending !== item) { cache.revoke(objectUrl); return; }
+            clearTimeout(item.timeout);
+            item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
             slot.objectUrl = objectUrl;
             item.element.src = objectUrl || url(file, entry.version, entry);
             if (isVideo) item.element.load();
-        });
+        }, !!item.notice);
     }
 
     function advance() {

@@ -297,7 +297,7 @@ test('Lecturas locales tardías se descartan y revocan su URL', () => {
         resolve(entry, done) { callbacks.push(done); },
         revoke(url) { if (url) revoked.push(url); }
     }) });
-    p.tick(21000);
+    p.tick(211000);
     callbacks[0]('blob:stale');
     assert.deepEqual(revoked, ['blob:stale']);
     callbacks[1]('blob:current');
@@ -376,4 +376,57 @@ test('Intervalo expira sin reproducir una copia precargada fuera de hora', () =>
     assert.equal(p.elements.image1.src, '/static/window.jpg?v=1');
     p.tick(1000);
     assert.equal(p.elements.image1.src, undefined);
+});
+
+test('Un único video no abre una segunda copia hasta terminar', () => {
+    const p = player(['only.mp4']);
+    p.event('video0', 'onloadedmetadata');
+    p.event('video0', 'onplaying');
+    assert.equal(p.elements.video1.src, '');
+    p.tick(5000);
+    assert.equal(p.elements.video1.src, '');
+    p.event('video0', 'onended');
+    assert.equal(p.elements.video1.src, '/static/only.mp4?v=1');
+});
+
+test('Espera la descarga compartida sin abrir una URL de red en paralelo', () => {
+    let complete;
+    const p = player(['video.mp4'], { cacheFactory: () => ({
+        ready: false, count: 0, sync() {}, reject() {}, has() { return false; }, revoke() {},
+        resolve(entry, done) { complete = done; }
+    }) });
+    p.tick(45000);
+    assert.equal(p.elements.video0.src, '');
+    complete('blob:downloaded');
+    assert.equal(p.elements.video0.src, 'blob:downloaded');
+    p.event('video0', 'onloadedmetadata'); p.event('video0', 'onplaying');
+    assert.equal(p.elements.video0.style.visibility, 'visible');
+});
+
+test('El aviso cancela la espera del video y solicita prioridad al caché', () => {
+    const calls = [], revoked = [];
+    let cancelled = 0;
+    const p = player(['video.mp4'], { schedule: {
+        server_time: Date.parse('2026-10-05T13:59:58Z'), utc_offset: -360,
+        schedules: [{ id: 'notice', mode: 'moment', start: '08:00', seconds: 10,
+            days: ['0'], media: { file: 'notice.jpg', version: '1' } }]
+    }, cacheFactory: () => ({
+        ready: false, count: 0, sync() {}, reject() {}, has() { return false; },
+        revoke(url) { if (url) revoked.push(url); },
+        resolve(entry, done, urgent) {
+            calls.push({ entry, done, urgent });
+            return () => { cancelled++; };
+        }
+    }) });
+    p.tick(2000);
+    assert.equal(cancelled, 1);
+    assert.equal(calls[1].entry.file, 'notice.jpg');
+    assert.equal(calls[1].urgent, true);
+    calls[0].done('blob:old-video');
+    assert.deepEqual(revoked, ['blob:old-video']);
+    calls[1].done('blob:notice'); p.event('image0', 'onload');
+    assert.equal(p.elements.image0.style.visibility, 'visible');
+    p.tick(10000);
+    assert.equal(p.elements.image0.style.visibility, 'hidden');
+    assert.equal(calls[2].entry.file, 'video.mp4');
 });

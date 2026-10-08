@@ -85,17 +85,16 @@ function cacheHarness(options = {}) {
 }
 const entry = (file, size = MB, version = '1') => ({ file, size, version });
 
-test('Descargas secuenciales, límite de 32 MB y máximo 8 MB por archivo', () => {
+test('Descargas secuenciales, máximo 24 MB por archivo y 32 MB en total', () => {
     const h = cacheHarness();
-    const list = [entry('too-big.mp4', 9 * MB), ...Array.from({ length: 6 }, (_, n) => entry(n + '.mp4', 8 * MB))];
+    const list = [entry('too-big.mp4', 25 * MB), entry('0.mp4', 24 * MB), entry('1.mp4', 8 * MB), entry('2.mp4', MB)];
     h.cache.sync(list); h.tick();
     assert.equal(h.requests.length, 1);
     assert.match(h.requests[0].url, /0\.mp4/);
-    for (let n = 0; n < 4; n++) {
-        h.respond(200, 8 * MB); h.tick(500);
-    }
-    assert.equal(h.requests.length, 4);
-    assert.equal(h.cache.count, 4);
+    h.respond(200, 24 * MB); h.tick(500);
+    h.respond(200, 8 * MB); h.tick(500);
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.cache.count, 2);
     assert.equal([...h.rows.values()].reduce((s, row) => s + row.blob.size, 0), 32 * MB);
 });
 
@@ -137,7 +136,7 @@ test('Descargas parciales y 404 se omiten; desconexiones esperan nueva sincroniz
     h.cache.sync(list); h.tick();
     h.respond(200, 5); h.tick(500);
     h.respond(404); h.tick(500);
-    h.tick(30000);
+    h.tick(90000);
     assert.equal(h.requests[2].aborted, true);
     assert.equal(h.cache.count, 0);
     h.tick(120000);
@@ -146,11 +145,10 @@ test('Descargas parciales y 404 se omiten; desconexiones esperan nueva sincroniz
     assert.equal(h.requests.length, 4);
 });
 
-test('Sin soporte o con cuota agotada entrega la alternativa de red', () => {
-    for (const options of [{ unsupported: true }, { quota: true }, { hangOpen: true }]) {
+test('Sin soporte o sin respuesta al abrir entrega la alternativa de red', () => {
+    for (const options of [{ unsupported: true }, { hangOpen: true }]) {
         const h = cacheHarness(options);
         h.cache.sync([entry('a.jpg')]); h.tick(5000);
-        if (options.quota) { h.respond(200, MB); h.tick(); }
         assert.equal(h.cache.supported, false);
         let result = 'pending';
         h.cache.resolve(entry('a.jpg'), url => { result = url; });
@@ -165,7 +163,7 @@ test('Lecturas que no responden terminan y permiten continuar por red', () => {
     h.cache.sync([entry('a.jpg')]); h.tick();
     let result = 'pending';
     h.cache.resolve(entry('a.jpg'), url => { result = url; });
-    h.tick(3000);
+    h.tick(5000);
     assert.equal(result, null);
 });
 
@@ -190,4 +188,95 @@ test('Copia rechazada no vuelve a seleccionarse hasta cambiar su versión', () =
     assert.equal(h.rows.size, 0);
     h.cache.sync([entry('a.jpg', MB, '2')]); h.tick();
     assert.equal(h.requests.length, 1);
+});
+
+test('Reproductor y arranque comparten una sola descarga completa', () => {
+    const h = cacheHarness();
+    const file = entry('video.mp4', 24 * MB);
+    h.cache.sync([file]);
+    let result = 'pending';
+    h.cache.resolve(file, url => { result = url; });
+    h.tick();
+    assert.equal(h.requests.length, 1);
+    assert.equal(result, 'pending');
+    h.tick(60000);
+    h.cache.sync([{ ...file }]);
+    h.respond(200, 24 * MB);
+    assert.equal(result, 'blob:' + 24 * MB);
+    assert.equal(h.cache.has(file), true);
+    h.tick(500);
+    h.cache.sync([{ ...file }]); h.tick();
+    assert.equal(h.requests.length, 1);
+});
+
+test('El archivo esperado avanza en la cola sin descargas simultáneas', () => {
+    const h = cacheHarness();
+    const files = ['a.jpg', 'b.jpg', 'c.jpg'].map(name => entry(name));
+    h.cache.sync(files); h.tick();
+    let result = 'pending';
+    h.cache.resolve(files[2], url => { result = url; });
+    assert.equal(h.requests.length, 1);
+    h.respond(200, MB); h.tick(500);
+    assert.match(h.requests[1].url, /c\.jpg/);
+    h.respond(200, MB);
+    assert.equal(result, 'blob:' + MB);
+    h.tick(500);
+    assert.match(h.requests[2].url, /b\.jpg/);
+});
+
+test('Cuota agotada conserva copias anteriores y reproduce el blob ya descargado', () => {
+    const saved = entry('saved.jpg');
+    const file = entry('new.mp4', 24 * MB);
+    const h = cacheHarness({ quota: true, rows: new Map([
+        [saved.file, { ...saved, blob: { size: MB } }]
+    ]) });
+    h.cache.sync([saved, file]); h.tick();
+    let result;
+    h.cache.resolve(file, url => { result = url; });
+    h.respond(200, file.size); h.tick(500);
+    assert.equal(result, 'blob:' + file.size);
+    assert.equal(h.cache.supported, true);
+    assert.equal(h.cache.has(saved), true);
+    assert.equal(h.cache.has(file), false);
+    h.cache.sync([saved, file]); h.tick();
+    assert.equal(h.requests.length, 1);
+});
+
+test('Cancelar la espera no entrega callbacks viejos ni detiene el guardado', () => {
+    const h = cacheHarness();
+    const file = entry('a.jpg');
+    h.cache.sync([file]); h.tick();
+    let called = false;
+    const cancel = h.cache.resolve(file, () => { called = true; });
+    cancel();
+    h.respond(200, MB); h.tick(500);
+    assert.equal(called, false);
+    assert.equal(h.cache.has(file), true);
+});
+
+test('Descarga agotada libera al reproductor y cancela la solicitud', () => {
+    const h = cacheHarness();
+    const file = entry('a.jpg');
+    h.cache.sync([file]); h.tick();
+    let result = 'pending';
+    h.cache.resolve(file, url => { result = url; });
+    h.tick(90000);
+    assert.equal(result, null);
+    assert.equal(h.requests[0].aborted, true);
+});
+
+test('Un aviso urgente cancela la descarga de fondo y obtiene prioridad', () => {
+    const h = cacheHarness();
+    const video = entry('video.mp4', 24 * MB), notice = entry('notice.jpg');
+    h.cache.sync([video, notice]); h.tick();
+    let result = 'pending';
+    h.cache.resolve(notice, url => { result = url; }, true);
+    assert.equal(h.requests[0].aborted, true);
+    h.tick(500);
+    assert.match(h.requests[1].url, /notice\.jpg/);
+    h.respond(200, MB);
+    assert.equal(result, 'blob:' + MB);
+    h.tick(500);
+    h.cache.sync([video, notice]); h.tick();
+    assert.match(h.requests[2].url, /video\.mp4/);
 });
