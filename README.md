@@ -300,17 +300,39 @@ El navegador intenta guardar archivos completos en IndexedDB. No usa Service
 Workers ni requiere HTTPS para este almacenamiento. Si el navegador no permite
 almacenamiento local, la reproducción sigue dependiendo de la conexión.
 
-Por pantalla se guardan hasta 32 MiB y 24 archivos, con un máximo de 8 MiB por
+Por pantalla se guardan hasta 32 MiB y 24 archivos, con un máximo de 24 MiB por
 archivo. El límite de carga del panel de 64 MB es distinto: un archivo aceptado
 por el panel puede ser demasiado grande para quedar guardado en la TV. Los
 archivos de avisos tienen prioridad frente al carrusel normal. Los límites
 están definidos en `templates/cache.js`.
 
-Las descargas son secuenciales y tienen un límite de 30 segundos. Los archivos
-incompletos no se guardan. El reproductor mantiene como máximo las referencias
+Las descargas son secuenciales y tienen un límite de 90 segundos. Los archivos
+incompletos no se guardan. El reproductor espera la descarga compartida de un
+archivo seleccionado para almacenamiento, evitando pedirlo simultáneamente por
+otra conexión. El archivo esperado tiene prioridad dentro de la cola; un aviso
+puede cancelar una descarga de fondo para empezar antes. Esa descarga cancelada
+se vuelve a intentar en una sincronización posterior. Una consulta sin cambios
+no reinicia ni descarta las descargas en curso.
+
+En el primer arranque, un archivo seleccionado puede tardar en aparecer hasta
+completar la descarga. La espera del caché tiene un máximo de 200 segundos,
+incluyendo la descarga que ya estuviera en curso; si falla, se intenta la URL
+del servidor. Si no se puede guardar un archivo, se conservan las demás copias
+y, cuando sea posible, se reproduce el archivo ya descargado sin volver a pedirlo.
+El archivo que no se pudo guardar no vuelve a seleccionarse durante esa sesión
+hasta que cambie su versión. Al recargar la página se puede intentar de nuevo.
+
+Con 32 MiB totales, dos videos de 22 MiB no caben juntos. Los avisos reservan
+espacio antes del carrusel. El caché HTTP del navegador puede coexistir con
+IndexedDB: estos límites solo controlan las copias guardadas por la aplicación.
+Nginx está configurado con `proxy_cache off`; sus buffers y archivos temporales
+sirven para enviar respuestas, sin conservar un caché reutilizable.
+
+El reproductor mantiene como máximo las referencias
 locales del archivo actual y el siguiente, y las libera al cambiar de contenido.
 Estos límites acotan los archivos guardados, pero no la memoria necesaria para
-decodificar una imagen o un video.
+decodificar una imagen o un video. Cuando el carrusel solo tiene un video, no
+precarga otra instancia del mismo mientras se está reproduciendo.
 
 Durante un corte pueden continuar el contenido y los horarios ya recibidos cuyos
 archivos estén guardados y sean reproducibles. **La página debe permanecer
