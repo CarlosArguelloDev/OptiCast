@@ -334,10 +334,35 @@ test('Aviso interrumpe video, conserva pantalla al cargar y vuelve al carrusel',
     p.event('image1', 'onload');
     assert.equal(p.elements.image1.style.visibility, 'visible');
     p.tick(10000);
+    assert.equal(p.elements.image1.style.visibility, 'hidden');
+    assert.equal(p.elements.status.style.display, 'block');
     assert.notEqual(p.elements.image0.src, '/static/seat.jpg?v=2');
     assert.equal(p.elements.image0.src, '/static/b.jpg?v=1');
     p.event('image0', 'onload');
     assert.equal(p.elements.image0.style.visibility, 'visible');
+});
+
+test('Aviso vencido desaparece aunque el video de regreso nunca empiece', () => {
+    const p = player(['a.mp4'], { schedule: {
+        server_time: Date.parse('2026-10-05T13:59:58Z'), utc_offset: -360,
+        schedules: [{ id: 'notice', mode: 'moment', start: '08:00', seconds: 10,
+            days: ['0'], media: { file: 'notice.jpg', version: '1' } }]
+    } });
+    p.event('video0', 'onloadedmetadata');
+    p.event('video0', 'onplaying');
+    p.tick(2000);
+    p.event('image1', 'onload');
+    assert.equal(p.elements.image1.style.visibility, 'visible');
+    p.tick(9999);
+    assert.equal(p.elements.image1.style.visibility, 'visible');
+    p.tick(1);
+    assert.equal(p.elements.image1.style.visibility, 'hidden');
+    assert.equal(p.elements.image1.src, undefined);
+    assert.equal(p.elements.video0.src, '/static/a.mp4?v=1');
+    p.event('video0', 'onloadedmetadata');
+    p.tick(20000);
+    assert.equal(p.elements.image1.style.visibility, 'hidden');
+    assert.equal(p.elements.status.style.display, 'block');
 });
 
 test('Intervalo expira sin reproducir una copia precargada fuera de hora', () => {

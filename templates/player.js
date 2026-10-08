@@ -334,6 +334,13 @@
             }
         } else if (!nextNotice) index = resumeIndex;
         cancelPrepared();
+        // Un aviso vencido no debe seguir visible mientras vuelve a cargar el carrusel.
+        if (active && active.notice) {
+            release(active.slot);
+            active = null;
+            status.textContent = 'Cargando contenido…';
+            status.style.display = 'block';
+        }
         if (active) {
             active.transitioning = true;
             if (active.isVideo) active.element.pause();
