@@ -131,8 +131,26 @@
         slot.objectUrl = null;
     }
 
+    function fallbackToNetwork(item, reason) {
+        if (pending !== item || !item.slot.objectUrl || item.networkTried) return false;
+        console.warn('Copia local fallida: ' + item.file + ' (' + reason + '). Probando servidor.');
+        item.networkTried = true;
+        item.playAttempt = (item.playAttempt || 0) + 1;
+        cache.reject(item.entry);
+        cache.revoke(item.slot.objectUrl);
+        item.slot.objectUrl = null;
+        item.ready = item.starting = false;
+        clearTimeout(item.timeout);
+        item.timeout = setTimeout(function () { fail(item, 'carga del servidor agotada'); }, LOAD_MS);
+        item.element.onplaying = null;
+        item.element.src = url(item.file, item.entry.version, item.entry);
+        if (item.isVideo) item.element.load();
+        return true;
+    }
+
     function fail(item, reason) {
         if (pending !== item) return;
+        if (item.isVideo && fallbackToNetwork(item, reason)) return;
         console.warn('No se pudo reproducir: ' + item.file + ' (' + reason + ')');
         pending = null;
         clearTimeout(item.timeout);
@@ -172,7 +190,10 @@
                 if (active === item) advance();
             };
             item.element.onerror = function () {
-                if (active === item) advance();
+                if (active === item) {
+                    if (item.slot.objectUrl) cache.reject(item.entry);
+                    advance();
+                }
             };
         } else {
             advanceTimer = setTimeout(advance, item.notice ? Math.max(1, item.notice.until - Date.now()) : (item.seconds || IMAGE_MS / 1000) * 1000);
@@ -185,6 +206,7 @@
         if (pending !== item || !item.ready || !item.due || item.starting) return;
         if (!item.isVideo) { promote(item); return; }
         item.starting = true;
+        var attempt = item.playAttempt = (item.playAttempt || 0) + 1;
         clearTimeout(item.timeout);
         item.timeout = setTimeout(function () { fail(item, 'inicio agotado'); }, LOAD_MS);
         item.element.onplaying = function () { promote(item); };
@@ -192,7 +214,9 @@
             var result = item.element.play();
             // Algunos navegadores antiguos no devuelven una promesa.
             if (result && typeof result.catch === 'function') {
-                result.catch(function () { fail(item, 'reproducción rechazada'); });
+                result.catch(function () {
+                    if (item.playAttempt === attempt) fail(item, 'reproducción rechazada');
+                });
             }
         } catch (error) { fail(item, 'reproducción rechazada'); }
     }
@@ -226,7 +250,7 @@
         var file = entry.file;
         if (!overrideEntry) index = (index + 1) % available.length;
         var isVideo = /\.(mp4|webm)$/i.test(file);
-        var item = { slot: slot, file: file, isVideo: isVideo,
+        var item = { slot: slot, file: file, entry: entry, isVideo: isVideo,
                      element: isVideo ? slot.video : slot.image,
                      due: due, ready: false, starting: false,
                      seconds: entry.seconds, notice: currentNotice, windowUntil: entry.windowUntil };
@@ -241,16 +265,8 @@
         item.timeout = setTimeout(function () { fail(item, 'almacenamiento agotado'); }, 210000);
         item.element.onerror = function () {
             if (pending !== item) return;
-            if (slot.objectUrl) {
-                cache.reject(entry);
-                cache.revoke(slot.objectUrl);
-                slot.objectUrl = null;
-                item.ready = item.starting = false;
-                clearTimeout(item.timeout);
-                item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
-                item.element.src = url(file, entry.version, entry);
-                if (isVideo) item.element.load();
-            } else fail(item, 'archivo o conexión');
+            if (fallbackToNetwork(item, 'archivo o conexión')) return;
+            fail(item, 'archivo o conexión');
         };
         if (isVideo) {
             item.element.muted = true;
@@ -364,6 +380,7 @@
             active.lastProgress = Date.now();
         } else if (Date.now() - active.lastProgress >= STALL_MS) {
             console.warn('Video detenido: ' + active.file);
+            if (active.slot.objectUrl) cache.reject(active.entry);
             advance();
         }
     }, 1000);

@@ -430,3 +430,56 @@ test('El aviso cancela la espera del video y solicita prioridad al caché', () =
     assert.equal(p.elements.image0.style.visibility, 'hidden');
     assert.equal(calls[2].entry.file, 'video.mp4');
 });
+
+function rejectingVideoCache(rejected) {
+    let local = true;
+    return () => ({
+        ready: true, count: 1, sync() {}, has() { return local; }, revoke() {},
+        reject(entry) { rejected.push(entry.file); local = false; },
+        resolve(entry, done) { done(local ? 'blob:video' : null); }
+    });
+}
+
+test('Video local sin metadata intenta el servidor al agotar la carga', () => {
+    const rejected = [];
+    const p = player(['video.mp4'], { cacheFactory: rejectingVideoCache(rejected) });
+    assert.equal(p.elements.video0.src, 'blob:video');
+    p.tick(20000);
+    assert.equal(p.elements.video0.src, '/static/video.mp4?v=1');
+    assert.deepEqual(rejected, ['video.mp4']);
+    p.event('video0', 'onloadedmetadata'); p.event('video0', 'onplaying');
+    assert.equal(p.elements.video0.style.visibility, 'visible');
+});
+
+test('Video local con metadata pero sin inicio intenta el servidor una sola vez', () => {
+    const rejected = [];
+    const p = player(['video.mp4'], { cacheFactory: rejectingVideoCache(rejected) });
+    p.event('video0', 'onloadedmetadata');
+    p.tick(20000);
+    assert.equal(p.elements.video0.src, '/static/video.mp4?v=1');
+    p.tick(20000);
+    assert.equal(p.elements.video0.src, undefined);
+    assert.deepEqual(rejected, ['video.mp4']);
+    p.tick(30000);
+    assert.equal(p.elements.video0.src, '/static/video.mp4?v=1');
+});
+
+test('Rechazo al reproducir la copia local intenta la URL del servidor', () => {
+    const rejected = [];
+    const p = player(['video.mp4'], { reject: true, cacheFactory: rejectingVideoCache(rejected) });
+    p.event('video0', 'onloadedmetadata');
+    assert.equal(p.elements.video0.src, '/static/video.mp4?v=1');
+    assert.deepEqual(rejected, ['video.mp4']);
+    p.event('video0', 'onloadedmetadata');
+    assert.equal(p.elements.video0.src, undefined);
+    assert.deepEqual(rejected, ['video.mp4']);
+});
+
+test('Video local detenido se rechaza y la siguiente vuelta utiliza el servidor', () => {
+    const rejected = [];
+    const p = player(['video.mp4'], { cacheFactory: rejectingVideoCache(rejected) });
+    p.event('video0', 'onloadedmetadata'); p.event('video0', 'onplaying');
+    p.tick(15000);
+    assert.deepEqual(rejected, ['video.mp4']);
+    assert.equal(p.elements.video1.src, '/static/video.mp4?v=1');
+});

@@ -64,6 +64,7 @@ function cacheHarness(options = {}) {
     XHR.prototype.abort = function () { this.aborted = true; };
     const context = {
         window: {
+            location: { search: options.search || '' },
             URL: { createObjectURL: blob => 'blob:' + blob.size, revokeObjectURL: url => revoked.push(url) },
             indexedDB: options.unsupported ? null : { open() {
                 const r = {};
@@ -279,4 +280,19 @@ test('Un aviso urgente cancela la descarga de fondo y obtiene prioridad', () => 
     h.tick(500);
     h.cache.sync([video, notice]); h.tick();
     assert.match(h.requests[2].url, /video\.mp4/);
+});
+
+test('cache=0 reproduce por red sin descargar ni borrar las copias persistidas', () => {
+    const file = entry('video.mp4');
+    const h = cacheHarness({ search: '?cache=0&estado=1', rows: new Map([
+        [file.file, { ...file, blob: { size: MB } }]
+    ]) });
+    h.cache.sync([file]); h.tick();
+    let result = 'pending';
+    h.cache.resolve(file, url => { result = url; });
+    assert.equal(result, null);
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.rows.size, 1);
+    assert.equal(h.cache.supported, false);
+    assert.equal(h.reports.at(-1).message, 'Prueba sin caché local');
 });

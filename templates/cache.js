@@ -266,6 +266,13 @@ function createCarouselCache(name, report) {
         if (!unchanged) requested = list;
         if (!opening) run();
     };
+    // Prueba temporal: conservar IndexedDB intacto y reproducir desde URLs HTTP.
+    if (/[?&]cache=0(?:&|$)/.test((window.location && window.location.search) || '')) {
+        opening = false;
+        api.ready = true;
+        notify('Prueba sin caché local');
+        return api;
+    }
     try {
         if (!window.indexedDB || !objectUrls || !objectUrls.createObjectURL ||
             !objectUrls.revokeObjectURL) { disable(); return api; }
