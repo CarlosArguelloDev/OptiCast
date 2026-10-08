@@ -334,6 +334,19 @@ Estos límites acotan los archivos guardados, pero no la memoria necesaria para
 decodificar una imagen o un video. Cuando el carrusel solo tiene un video, no
 precarga otra instancia del mismo mientras se está reproduciendo.
 
+Si un video local falla, agota su espera de carga o no logra iniciar la
+reproducción, se intenta la URL del servidor una vez. Esa versión se excluye
+del caché durante la sesión para evitar repetir indefinidamente la misma copia.
+También se excluye si el video guardado se detiene o falla después de iniciar.
+Esto permite recuperar navegadores que no reproducen correctamente videos `blob:`;
+la alternativa por red sigue necesitando conexión y un formato compatible con la TV.
+
+Para comparar la reproducción con y sin IndexedDB en una TV, abre temporalmente
+su carrusel con `?cache=0&estado=1`, por ejemplo `/vulcas?cache=0&estado=1`.
+Esta prueba no lee, descarga ni borra las copias de IndexedDB: utiliza las URLs
+del servidor y puede seguir aprovechando el caché HTTP normal del navegador.
+Quita `cache=0` y recarga para volver al almacenamiento local habitual.
+
 Durante un corte pueden continuar el contenido y los horarios ya recibidos cuyos
 archivos estén guardados y sean reproducibles. **La página debe permanecer
 abierta**: no se puede abrir ni recargar sin conexión. El navegador puede borrar
