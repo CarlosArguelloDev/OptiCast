@@ -341,6 +341,12 @@ También se excluye si el video guardado se detiene o falla después de iniciar.
 Esto permite recuperar navegadores que no reproducen correctamente videos `blob:`;
 la alternativa por red sigue necesitando conexión y un formato compatible con la TV.
 
+Cuando llega el turno de un video y ya tiene una URL disponible, se llama a
+`play()` sin esperar primero el evento `loadedmetadata`. Esto evita depender de
+la precarga de metadatos para iniciar. El contenido se muestra al recibir
+`playing`; recibir metadatos por sí solo no cancela el límite de inicio de 20 segundos.
+Un video precargado para el siguiente turno no se reproduce antes de tiempo.
+
 Para comparar la reproducción con y sin IndexedDB en una TV, abre temporalmente
 su carrusel con `?cache=0&estado=1`, por ejemplo `/vulcas?cache=0&estado=1`.
 Esta prueba no lee, descarga ni borra las copias de IndexedDB: utiliza las URLs
