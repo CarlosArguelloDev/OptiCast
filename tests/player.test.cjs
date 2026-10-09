@@ -24,6 +24,7 @@ function player(media, options = {}) {
             pause() { this.paused = true; }, load() {},
             play() {
                 this.paused = false;
+                if (options.playHook) return options.playHook(this);
                 if (options.reject) return { catch(fn) { fn(new Error('blocked')); } };
                 // Retorno indefinido de televisiones con navegadores antiguos.
             }
@@ -466,13 +467,39 @@ test('Video local con metadata pero sin inicio intenta el servidor una sola vez'
 
 test('Rechazo al reproducir la copia local intenta la URL del servidor', () => {
     const rejected = [];
-    const p = player(['video.mp4'], { reject: true, cacheFactory: rejectingVideoCache(rejected) });
-    p.event('video0', 'onloadedmetadata');
+    const rejections = [];
+    const p = player(['video.mp4'], {
+        playHook() { return { catch(fn) { rejections.push(fn); } }; },
+        cacheFactory: rejectingVideoCache(rejected)
+    });
+    rejections[0](new Error('local rejected'));
     assert.equal(p.elements.video0.src, '/static/video.mp4?v=1');
     assert.deepEqual(rejected, ['video.mp4']);
-    p.event('video0', 'onloadedmetadata');
+    rejections[1](new Error('network rejected'));
     assert.equal(p.elements.video0.src, undefined);
     assert.deepEqual(rejected, ['video.mp4']);
+});
+
+test('Arranca en un navegador que solo entrega metadatos después de play', () => {
+    let plays = 0;
+    const p = player(['video.mp4'], { playHook(video) {
+        plays++;
+        if (video.onloadedmetadata) video.onloadedmetadata();
+        if (video.onplaying) video.onplaying();
+    } });
+    assert.equal(plays, 1);
+    assert.equal(p.elements.video0.style.visibility, 'visible');
+    p.tick(10000);
+    assert.equal(p.elements.status.style.display, 'none');
+    assert.equal(p.elements.video1.src, '');
+});
+
+test('Metadatos sin reproducción no cancelan la protección contra inicio agotado', () => {
+    const p = player(['video.mp4']);
+    p.tick(10000); p.event('video0', 'onloadedmetadata');
+    p.tick(10000);
+    assert.equal(p.elements.video0.src, undefined);
+    assert.equal(p.elements.status.textContent, 'Esperando contenido. Reintentando…');
 });
 
 test('Video local detenido se rechaza y la siguiente vuelta utiliza el servidor', () => {

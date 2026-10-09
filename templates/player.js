@@ -144,7 +144,7 @@
         item.timeout = setTimeout(function () { fail(item, 'carga del servidor agotada'); }, LOAD_MS);
         item.element.onplaying = null;
         item.element.src = url(item.file, item.entry.version, item.entry);
-        if (item.isVideo) item.element.load();
+        if (item.isVideo) { item.element.load(); activate(item); }
         return true;
     }
 
@@ -203,13 +203,14 @@
     }
 
     function activate(item) {
-        if (pending !== item || !item.ready || !item.due || item.starting) return;
+        if (pending !== item || !item.due || item.starting ||
+            (!item.ready && (!item.isVideo || !item.sourced))) return;
         if (!item.isVideo) { promote(item); return; }
         item.starting = true;
         var attempt = item.playAttempt = (item.playAttempt || 0) + 1;
         clearTimeout(item.timeout);
         item.timeout = setTimeout(function () { fail(item, 'inicio agotado'); }, LOAD_MS);
-        item.element.onplaying = function () { promote(item); };
+        item.element.onplaying = function () { item.ready = true; promote(item); };
         try {
             var result = item.element.play();
             // Algunos navegadores antiguos no devuelven una promesa.
@@ -257,7 +258,7 @@
         pending = item;
         function ready() {
             if (pending !== item || item.ready) return;
-            clearTimeout(item.timeout);
+            if (!item.starting) clearTimeout(item.timeout);
             item.ready = true;
             activate(item);
         }
@@ -280,8 +281,11 @@
             clearTimeout(item.timeout);
             item.timeout = setTimeout(function () { fail(item, 'carga agotada'); }, LOAD_MS);
             slot.objectUrl = objectUrl;
+            item.sourced = true;
             item.element.src = objectUrl || url(file, entry.version, entry);
-            if (isVideo) item.element.load();
+            // Iniciar el video debido sin depender de que preload emita metadatos.
+            // El siguiente video permanece detenido hasta su turno.
+            if (isVideo) { item.element.load(); activate(item); }
         }, !!item.notice);
     }
 
