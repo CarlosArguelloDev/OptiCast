@@ -216,10 +216,36 @@
             // Algunos navegadores antiguos no devuelven una promesa.
             if (result && typeof result.catch === 'function') {
                 result.catch(function () {
-                    if (item.playAttempt === attempt) fail(item, 'reproducción rechazada');
+                    if (item.playAttempt !== attempt) return;
+                    if (!item.element.muted) {
+                        item.element.muted = true;
+                        try {
+                            var retry = item.element.play();
+                            if (retry && typeof retry.catch === 'function') {
+                                retry.catch(function () {
+                                    if (item.playAttempt === attempt) fail(item, 'reproducción rechazada');
+                                });
+                            }
+                        } catch (e) {
+                            if (item.playAttempt === attempt) fail(item, 'reproducción rechazada');
+                        }
+                        return;
+                    }
+                    fail(item, 'reproducción rechazada');
                 });
             }
-        } catch (error) { fail(item, 'reproducción rechazada'); }
+        } catch (error) {
+            if (!item.element.muted) {
+                item.element.muted = true;
+                try {
+                    item.element.play();
+                } catch (e) {
+                    fail(item, 'reproducción rechazada');
+                }
+            } else {
+                fail(item, 'reproducción rechazada');
+            }
+        }
     }
 
     function prepare(due) {
@@ -270,7 +296,8 @@
             fail(item, 'archivo o conexión');
         };
         if (isVideo) {
-            item.element.muted = true;
+            item.element.muted = false;
+            item.element.defaultMuted = false;
             item.element.onloadedmetadata = ready;
         } else {
             item.element.onload = ready;
@@ -388,6 +415,12 @@
             advance();
         }
     }, 1000);
+
+    window.addEventListener('click', function () {
+        if (active && active.isVideo && active.element) {
+            active.element.muted = false;
+        }
+    });
 
     if (media.length) prepare(true);
     else status.textContent = 'No hay contenido disponible.';
