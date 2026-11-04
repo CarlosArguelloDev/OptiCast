@@ -141,7 +141,10 @@
             </div>
         </div>
     </div>
-    <div class="timeline-summary-bar" id="timeline-summary-bar"></div>
+    <details class="timeline-summary-details" id="timeline-summary-details">
+        <summary class="timeline-summary-toggle" id="timeline-summary-toggle">Resumen del día (0)</summary>
+        <div class="timeline-summary-bar" id="timeline-summary-bar"></div>
+    </details>
     <div id="timeline-tooltip" class="timeline-tooltip" style="display: none;"></div>
 </section>
 
@@ -520,13 +523,18 @@ document.querySelectorAll('.mode').forEach(function(select){function update(){va
 
     function renderDaySummary(events) {
         if (!summaryBar) return;
+        var summaryToggle = document.getElementById('timeline-summary-toggle');
         events.sort(function(a, b) { return a.start - b.start; });
+        if (summaryToggle) {
+            summaryToggle.textContent = events.length
+                ? ('Ver resumen del día (' + events.length + (events.length === 1 ? ' anuncio)' : ' anuncios)'))
+                : 'Ver resumen del día (Sin anuncios)';
+        }
         if (!events.length) {
             summaryBar.innerHTML = '<span class="timeline-summary-empty">No hay anuncios programados para los filtros seleccionados en este día. Haz clic en cualquier pista para programar uno.</span>';
             return;
         }
-        var html = '<span class="timeline-summary-label">Resumen del día (' + events.length + '):</span>';
-        summaryBar.innerHTML = html;
+        summaryBar.innerHTML = '';
         events.forEach(function(ev) {
             var s = ev.schedule;
             var btn = document.createElement('button');

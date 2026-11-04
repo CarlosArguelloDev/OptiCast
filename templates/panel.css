@@ -69,10 +69,12 @@ button,.button{display:inline-block;border:1px solid transparent;border-radius:6
 .clip-time{font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums;color:white;letter-spacing:-.2px}
 .clip-dept{font-size:9.5px;font-weight:600;background:rgba(0,0,0,0.2);color:white;padding:1px 4px;border-radius:3px;overflow:hidden;text-overflow:ellipsis}
 .clip-title{font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,0.96);line-height:1.2;margin-top:1px}
-.timeline-summary-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
-.timeline-summary-label{font-size:12px;font-weight:600;color:var(--muted);margin-right:4px}
-.timeline-summary-item{display:inline-flex;align-items:center;gap:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:4px 9px;font-size:12px;color:var(--ink);cursor:pointer;transition:all .12s ease}
-.timeline-summary-item:hover{border-color:#94a3b8;background:#f1f5f9}
+.timeline-summary-details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.timeline-summary-toggle{font-size:13px;font-weight:600;color:#334155;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;transition:background .12s ease}
+.timeline-summary-toggle:hover{background:#f1f5f9;color:var(--primary)}
+.timeline-summary-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;max-height:180px;overflow-y:auto}
+.timeline-summary-item{display:inline-flex;align-items:center;gap:6px;background:white;border:1px solid #cbd5e1;border-radius:6px;padding:4px 9px;font-size:12px;color:var(--ink);cursor:pointer;transition:all .12s ease}
+.timeline-summary-item:hover{border-color:var(--primary);background:#f1f5f9}
 .timeline-summary-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .timeline-summary-time{font-weight:700;font-variant-numeric:tabular-nums;color:#0f172a}
 .timeline-summary-empty{font-size:12.5px;color:var(--muted)}
