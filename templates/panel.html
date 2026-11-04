@@ -62,7 +62,7 @@
     <div class="timeline-header">
         <div>
             <h2>Línea de tiempo de programaciones</h2>
-            <p class="muted">Horarios ocupados por departamento en cada pantalla. Los anuncios no pueden cruzarse en horario.</p>
+            <p class="muted">Horarios ocupados por departamento en cada pantalla. Usa el zoom para ver minutos al detalle o haz clic en un espacio libre para programar.</p>
         </div>
         <div class="timeline-legend">
             {% for dept in departments %}
@@ -81,6 +81,12 @@
             {% endfor %}
         </div>
         <div class="timeline-actions">
+            <div class="timeline-zoom-group" role="group" aria-label="Zoom de la tabla">
+                <button type="button" class="timeline-zoom-btn" id="timeline-zoom-out" title="Alejar tabla" aria-label="Alejar">−</button>
+                <span class="timeline-zoom-level" id="timeline-zoom-label" title="Haz clic para restablecer vista 24h" style="cursor:pointer;">1x · 24h</span>
+                <button type="button" class="timeline-zoom-btn" id="timeline-zoom-in" title="Acercar tabla" aria-label="Acercar">+</button>
+            </div>
+            <button type="button" class="timeline-focus-btn" id="timeline-focus-btn" title="Enfocar en actividad o en la hora actual">Enfocar</button>
             <label for="timeline-screen-filter" class="sr-only">Filtrar pantalla</label>
             <select id="timeline-screen-filter" class="timeline-screen-select">
                 <option value="all">Todas las pantallas</option>
@@ -88,23 +94,27 @@
                 <option value="{{sc.name}}">{{sc.name|capitalize}}</option>
                 {% endfor %}
             </select>
-            <span class="timeline-clock" id="timeline-live-clock">🕒 00:00 (UTC-6)</span>
+            <span class="timeline-clock" id="timeline-live-clock">00:00:00 (UTC-6)</span>
         </div>
     </div>
 
-    <div class="timeline-scroll-wrap">
+    <div class="timeline-scroll-wrap" id="timeline-scroll-wrap">
         <div class="timeline-board" id="timeline-board">
             <div class="timeline-ruler">
                 <div class="timeline-ruler-corner">Pantalla</div>
-                <div class="timeline-ruler-scale">
+                <div class="timeline-ruler-scale" id="timeline-ruler-scale">
                     {% for h in range(0, 25, 2) %}
-                    <span class="timeline-tick" style="left: calc({{h}} / 24 * 100%);">{{ '%02d:00' % (h % 24) }}</span>
+                    <div class="timeline-tick {{'is-first' if h==0 else ('is-last' if h==24 else '')}}" style="left: calc({{h}} / 24 * 100%);">
+                        <span class="timeline-tick-label">{{ '24:00' if h == 24 else ('%02d:00' % h) }}</span>
+                        <span class="timeline-tick-mark"></span>
+                    </div>
                     {% endfor %}
                 </div>
             </div>
 
             <div class="timeline-body-wrap">
                 <div class="timeline-playhead" id="timeline-playhead">
+                    <div class="timeline-playhead-badge" id="timeline-playhead-badge">00:00</div>
                     <div class="timeline-playhead-head">▼</div>
                     <div class="timeline-playhead-line"></div>
                 </div>
@@ -113,15 +123,16 @@
                     {% for sc in screens %}
                     <div class="timeline-track" data-screen="{{sc.name}}">
                         <div class="timeline-track-label">
-                            <span class="track-tv-icon">📺</span>
                             <strong>{{sc.name|capitalize}}</strong>
+                            <span class="timeline-track-count" id="count-{{sc.name}}">Libre</span>
                         </div>
                         <div class="timeline-track-lane" data-screen="{{sc.name}}" title="Haz clic en un espacio libre para programar a esa hora">
-                            <div class="timeline-grid-lines">
+                            <div class="timeline-grid-lines" data-grid="{{sc.name}}">
                                 {% for h in range(0, 24, 2) %}
                                 <div class="timeline-grid-col" style="left: calc({{h}} / 24 * 100%);"></div>
                                 {% endfor %}
                             </div>
+                            <div class="timeline-hover-guide"><span class="timeline-hover-time">00:00</span></div>
                             <div class="timeline-track-items" id="lane-{{sc.name}}"></div>
                         </div>
                     </div>
@@ -130,6 +141,7 @@
             </div>
         </div>
     </div>
+    <div class="timeline-summary-bar" id="timeline-summary-bar"></div>
     <div id="timeline-tooltip" class="timeline-tooltip" style="display: none;"></div>
 </section>
 
@@ -173,27 +185,60 @@ document.querySelectorAll('.mode').forEach(function(select){function update(){va
     var schedules = {{ timeline_json|tojson }};
     var weekdays = {{ weekdays|tojson }};
     var currentDay = 'today';
-    
+    var ZOOM_STEPS = [
+        { scale: 1, label: '1x · 24h', majorMin: 120, minorMin: 60 },
+        { scale: 2, label: '2x · 12h', majorMin: 60, minorMin: 30 },
+        { scale: 4, label: '4x · 6h', majorMin: 30, minorMin: 15 },
+        { scale: 8, label: '8x · 3h', majorMin: 15, minorMin: 5 },
+        { scale: 16, label: '16x · Detalle', majorMin: 5, minorMin: 1 }
+    ];
+    var zoomIdx = 0;
+    var LABEL_COL_PX = 136;
+
+    var scrollWrap = document.getElementById('timeline-scroll-wrap');
+    var board = document.getElementById('timeline-board');
+    var rulerScale = document.getElementById('timeline-ruler-scale');
+    var zoomLabel = document.getElementById('timeline-zoom-label');
+    var zoomOutBtn = document.getElementById('timeline-zoom-out');
+    var zoomInBtn = document.getElementById('timeline-zoom-in');
+    var focusBtn = document.getElementById('timeline-focus-btn');
+    var summaryBar = document.getElementById('timeline-summary-bar');
+    var tooltip = document.getElementById('timeline-tooltip');
+
     function getUtc6() {
         var now = new Date();
         var utc = now.getTime() + (now.getTimezoneOffset() * 60000);
         return new Date(utc - (6 * 3600000));
     }
-    
+
     function resolveDayIndex(dayVal) {
         if (dayVal === 'today') {
             return (getUtc6().getDay() + 6) % 7;
         }
         return parseInt(dayVal, 10);
     }
-    
+
     function parseMinute(timeStr) {
         if (!timeStr) return 0;
         var p = timeStr.split(':');
         return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
     }
 
-    var tooltip = document.getElementById('timeline-tooltip');
+    function formatMin(totalMin) {
+        var clamped = Math.max(0, Math.min(1440, Math.round(totalMin)));
+        if (clamped === 1440) return '24:00';
+        var h = Math.floor(clamped / 60);
+        var m = clamped % 60;
+        return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+    }
+
+    function formatDuration(seconds) {
+        if (seconds < 60) return seconds + ' seg';
+        var mins = Math.round(seconds / 60);
+        if (mins < 60) return mins + ' min';
+        var hrs = (seconds / 3600).toFixed(1).replace(/\.0$/, '');
+        return hrs + ' h';
+    }
 
     function escapeHtml(str) {
         var div = document.createElement('div');
@@ -201,141 +246,356 @@ document.querySelectorAll('.mode').forEach(function(select){function update(){va
         return div.innerHTML;
     }
 
-    function renderTimeline() {
-        var dayIdx = resolveDayIndex(currentDay);
-        var playhead = document.getElementById('timeline-playhead');
-        var now = getUtc6();
-        var todayIdx = (now.getDay() + 6) % 7;
-        
-        if (playhead) {
-            if (currentDay === 'today' || dayIdx === todayIdx) {
-                var totalMin = now.getHours() * 60 + now.getMinutes() + (now.getSeconds() / 60);
-                var pct = (totalMin / 1440) * 100;
-                playhead.style.display = 'block';
-                playhead.style.left = 'calc(140px + (100% - 140px) * ' + (pct / 100) + ')';
+    function renderRulerAndGrid() {
+        var cfg = ZOOM_STEPS[zoomIdx];
+        if (zoomLabel) zoomLabel.textContent = cfg.label;
+        if (zoomOutBtn) zoomOutBtn.disabled = (zoomIdx === 0);
+        if (zoomInBtn) zoomInBtn.disabled = (zoomIdx === ZOOM_STEPS.length - 1);
+
+        if (board) {
+            if (cfg.scale === 1) {
+                board.style.width = '100%';
             } else {
-                playhead.style.display = 'none';
+                board.style.width = 'calc(' + LABEL_COL_PX + 'px + (100% - ' + LABEL_COL_PX + 'px) * ' + cfg.scale + ')';
             }
         }
-        
-        document.querySelectorAll('.timeline-track-items').forEach(function(el) {
-            el.innerHTML = '';
+
+        if (rulerScale) {
+            var rulerHtml = '';
+            for (var m = 0; m <= 1440; m += cfg.minorMin) {
+                var pct = (m / 1440) * 100;
+                if (m % cfg.majorMin === 0) {
+                    var edgeClass = (m === 0) ? ' is-first' : (m === 1440 ? ' is-last' : '');
+                    rulerHtml += '<div class="timeline-tick' + edgeClass + '" style="left:' + pct + '%;">' +
+                        '<span class="timeline-tick-label">' + formatMin(m) + '</span>' +
+                        '<span class="timeline-tick-mark"></span></div>';
+                } else {
+                    rulerHtml += '<div class="timeline-subtick" style="left:' + pct + '%;"></div>';
+                }
+            }
+            rulerScale.innerHTML = rulerHtml;
+        }
+
+        var gridHtml = '';
+        for (var g = 0; g < 1440; g += cfg.minorMin) {
+            var gPct = (g / 1440) * 100;
+            var isMajor = (g % cfg.majorMin === 0);
+            gridHtml += '<div class="timeline-grid-col' + (isMajor ? '' : ' is-minor') + '" style="left:' + gPct + '%;"></div>';
+        }
+        document.querySelectorAll('.timeline-grid-lines').forEach(function(gridEl) {
+            gridEl.innerHTML = gridHtml;
         });
-        
-        var screenFilterEl = document.getElementById('timeline-screen-filter');
-        var filterScreen = screenFilterEl ? screenFilterEl.value : 'all';
-        document.querySelectorAll('.timeline-track').forEach(function(tr) {
-            var sc = tr.getAttribute('data-screen');
-            tr.style.display = (filterScreen === 'all' || filterScreen === sc) ? 'flex' : 'none';
-        });
+    }
+
+    function setZoom(newIdx, centerMinute) {
+        var targetIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, newIdx));
+        if (targetIdx === zoomIdx && centerMinute === undefined) return;
+
+        // Determine which minute was at the center of the viewport before zooming
+        if (centerMinute === undefined && scrollWrap) {
+            var laneAreaWidth = Math.max(1, board.clientWidth - LABEL_COL_PX);
+            var visibleCenterPx = scrollWrap.scrollLeft + (scrollWrap.clientWidth - LABEL_COL_PX) / 2;
+            centerMinute = Math.max(0, Math.min(1440, (visibleCenterPx / laneAreaWidth) * 1440));
+        }
+
+        zoomIdx = targetIdx;
+        renderRulerAndGrid();
+        renderTimeline();
+
+        if (scrollWrap && centerMinute !== undefined) {
+            if (ZOOM_STEPS[zoomIdx].scale === 1) {
+                scrollWrap.scrollLeft = 0;
+            } else {
+                var newLaneWidth = Math.max(1, board.clientWidth - LABEL_COL_PX);
+                var targetPx = (centerMinute / 1440) * newLaneWidth;
+                var desiredScroll = targetPx - (scrollWrap.clientWidth - LABEL_COL_PX) / 2;
+                scrollWrap.scrollLeft = Math.max(0, desiredScroll);
+            }
+        }
+    }
+
+    function collectIntervalsForScreenDay(screen, dayIdx) {
+        var yesterdayIdx = (dayIdx + 6) % 7;
+        var list = [];
 
         schedules.forEach(function(s) {
             var targets = JSON.parse(s.targets || '[]');
+            if (targets.indexOf(screen) === -1) return;
+
             var days = JSON.parse(s.days || '[]');
-            var yesterdayIdx = (dayIdx + 6) % 7;
-            
             var startsToday = days.indexOf(String(dayIdx)) !== -1;
             var startsYesterday = days.indexOf(String(yesterdayIdx)) !== -1;
-            
-            targets.forEach(function(screen) {
-                if (filterScreen !== 'all' && filterScreen !== screen) return;
-                var lane = document.getElementById('lane-' + screen);
-                if (!lane) return;
-                
-                var intervals = [];
-                if (s.mode === 'moment') {
-                    var durMin = Math.max(0.5, s.seconds / 60);
-                    if (startsToday) {
-                        var st = parseMinute(s.start);
-                        var et = st + durMin;
-                        intervals.push({ start: st, end: Math.min(1440, et), part: 'normal' });
-                    }
-                    if (startsYesterday) {
-                        var ySt = parseMinute(s.start);
-                        var yEt = ySt + durMin;
-                        if (yEt > 1440) {
-                            intervals.push({ start: 0, end: yEt - 1440, part: 'spill' });
-                        }
-                    }
-                } else {
+
+            if (s.mode === 'moment') {
+                var durMin = Math.max(0.5, s.seconds / 60);
+                if (startsToday) {
                     var st = parseMinute(s.start);
-                    var et = parseMinute(s.end);
-                    var crosses = et <= st;
-                    if (startsToday) {
-                        if (crosses) {
-                            intervals.push({ start: st, end: 1440, part: 'normal' });
-                        } else {
-                            intervals.push({ start: st, end: et, part: 'normal' });
-                        }
-                    }
-                    if (startsYesterday && crosses) {
-                        intervals.push({ start: 0, end: et, part: 'spill' });
+                    var et = st + durMin;
+                    list.push({ start: st, end: Math.min(1440, et), schedule: s, targets: targets });
+                }
+                if (startsYesterday) {
+                    var ySt = parseMinute(s.start);
+                    var yEt = ySt + durMin;
+                    if (yEt > 1440) {
+                        list.push({ start: 0, end: yEt - 1440, schedule: s, targets: targets });
                     }
                 }
-                
-                intervals.forEach(function(iv) {
-                    var leftPct = (iv.start / 1440) * 100;
-                    var dur = iv.end - iv.start;
-                    var widthPct = (dur / 1440) * 100;
-                    
-                    var clip = document.createElement('div');
-                    clip.className = 'timeline-clip';
-                    clip.style.left = leftPct + '%';
-                    clip.style.width = 'max(' + widthPct + '%, 38px)';
-                    clip.style.backgroundColor = s.color ? s.color.bg : '#5645d4';
-                    clip.style.borderColor = s.color ? s.color.border : '#3a2a99';
-                    
-                    var avatar = document.createElement('span');
-                    avatar.className = 'clip-avatar';
-                    avatar.textContent = s.department_name ? s.department_name.substring(0, 3) : 'AV';
-                    clip.appendChild(avatar);
-                    
-                    var title = document.createElement('strong');
+            } else {
+                var wSt = parseMinute(s.start);
+                var wEt = parseMinute(s.end);
+                var crosses = wEt <= wSt;
+                if (startsToday) {
+                    if (crosses) {
+                        list.push({ start: wSt, end: 1440, schedule: s, targets: targets });
+                    } else {
+                        list.push({ start: wSt, end: wEt, schedule: s, targets: targets });
+                    }
+                }
+                if (startsYesterday && crosses) {
+                    list.push({ start: 0, end: wEt, schedule: s, targets: targets });
+                }
+            }
+        });
+
+        list.sort(function(a, b) { return a.start - b.start || a.end - b.end; });
+        return list;
+    }
+
+    function updatePlayheadPosition() {
+        var dayIdx = resolveDayIndex(currentDay);
+        var playhead = document.getElementById('timeline-playhead');
+        var playheadBadge = document.getElementById('timeline-playhead-badge');
+        var now = getUtc6();
+        var todayIdx = (now.getDay() + 6) % 7;
+
+        if (!playhead) return;
+        if (currentDay === 'today' || dayIdx === todayIdx) {
+            var totalMin = now.getHours() * 60 + now.getMinutes() + (now.getSeconds() / 60);
+            var pct = (totalMin / 1440) * 100;
+            playhead.style.display = 'block';
+            playhead.style.left = 'calc(' + LABEL_COL_PX + 'px + (100% - ' + LABEL_COL_PX + 'px) * ' + (pct / 100) + ')';
+            if (playheadBadge) {
+                playheadBadge.textContent = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+            }
+        } else {
+            playhead.style.display = 'none';
+        }
+    }
+
+    function renderTimeline() {
+        var dayIdx = resolveDayIndex(currentDay);
+        updatePlayheadPosition();
+
+        var screenFilterEl = document.getElementById('timeline-screen-filter');
+        var filterScreen = screenFilterEl ? screenFilterEl.value : 'all';
+
+        var uniqueDayEvents = {};
+
+        document.querySelectorAll('.timeline-track').forEach(function(tr) {
+            var screen = tr.getAttribute('data-screen');
+            var visible = (filterScreen === 'all' || filterScreen === screen);
+            tr.style.display = visible ? 'flex' : 'none';
+
+            var lane = document.getElementById('lane-' + screen);
+            var countEl = document.getElementById('count-' + screen);
+            if (!lane) return;
+            lane.innerHTML = '';
+
+            var intervals = collectIntervalsForScreenDay(screen, dayIdx);
+            if (countEl) {
+                countEl.textContent = intervals.length
+                    ? (intervals.length + (intervals.length === 1 ? ' aviso' : ' avisos'))
+                    : 'Libre';
+            }
+
+            if (!visible) return;
+
+            var laneWidth = lane.clientWidth || Math.max(600, (board ? board.clientWidth : 860) - LABEL_COL_PX);
+
+            intervals.forEach(function(iv, idx) {
+                var s = iv.schedule;
+                if (!uniqueDayEvents[s.id + '_' + iv.start]) {
+                    uniqueDayEvents[s.id + '_' + iv.start] = {
+                        start: iv.start,
+                        end: iv.end,
+                        schedule: s,
+                        targets: iv.targets
+                    };
+                }
+
+                var startPx = (iv.start / 1440) * laneWidth;
+                var trueWidthPx = ((iv.end - iv.start) / 1440) * laneWidth;
+                var nextStartPx = (idx + 1 < intervals.length)
+                    ? ((intervals[idx + 1].start / 1440) * laneWidth)
+                    : laneWidth;
+
+                // Garantizar separación mínima de 2px con el siguiente bloque para que jamás se encimen visualmente
+                var maxAvailPx = Math.max(6, nextStartPx - startPx - 2);
+                var minReadablePx = 68;
+                var visualWidthPx = Math.min(Math.max(trueWidthPx, minReadablePx), maxAvailPx, laneWidth - startPx);
+
+                var leftPct = (iv.start / 1440) * 100;
+                var widthPct = (visualWidthPx / laneWidth) * 100;
+
+                var clip = document.createElement('div');
+                clip.className = 'timeline-clip' + (visualWidthPx < 36 ? ' is-compact' : '');
+                clip.style.left = leftPct + '%';
+                clip.style.width = widthPct + '%';
+                clip.style.backgroundColor = s.color ? s.color.bg : '#5645d4';
+                clip.style.borderColor = s.color ? s.color.border : '#3a2a99';
+
+                var endLabel = s.end ? s.end : formatMin(iv.start + Math.max(1, Math.round(s.seconds / 60)));
+
+                if (visualWidthPx >= 36) {
+                    var head = document.createElement('div');
+                    head.className = 'clip-head';
+
+                    var timeSpan = document.createElement('span');
+                    timeSpan.className = 'clip-time';
+                    timeSpan.textContent = visualWidthPx >= 95 ? (s.start + '–' + endLabel) : s.start;
+                    head.appendChild(timeSpan);
+
+                    if (visualWidthPx >= 135 && s.department_name) {
+                        var deptSpan = document.createElement('span');
+                        deptSpan.className = 'clip-dept';
+                        deptSpan.textContent = s.department_name;
+                        head.appendChild(deptSpan);
+                    }
+                    clip.appendChild(head);
+
+                    var title = document.createElement('div');
                     title.className = 'clip-title';
                     title.textContent = s.title;
                     clip.appendChild(title);
-                    
-                    var timeSpan = document.createElement('span');
-                    timeSpan.className = 'clip-time';
-                    timeSpan.textContent = s.start + (s.end ? '-' + s.end : '');
-                    clip.appendChild(timeSpan);
-                    
-                    clip.addEventListener('mouseenter', function() {
-                        if (!tooltip) return;
-                        tooltip.innerHTML = '<strong>' + escapeHtml(s.title) + '</strong>' +
-                            '<div class="timeline-tooltip-row"><span>Depto:</span> <b>' + escapeHtml(s.department_name) + '</b></div>' +
-                            '<div class="timeline-tooltip-row"><span>Horario:</span> <span>' + s.start + (s.end ? ' a ' + s.end : '') + ' (' + s.seconds + 's)</span></div>' +
-                            '<div class="timeline-tooltip-row"><span>Tipo:</span> <span>' + (s.mode === 'moment' ? 'Aviso (interrumpe)' : 'Intervalo') + '</span></div>' +
-                            '<div class="timeline-tooltip-row"><span>Pantallas:</span> <span>' + escapeHtml(targets.join(', ')) + '</span></div>';
-                        tooltip.style.display = 'block';
-                    });
-                    clip.addEventListener('mousemove', function(e) {
-                        if (!tooltip) return;
-                        tooltip.style.left = (e.clientX + 14) + 'px';
-                        tooltip.style.top = (e.clientY + 14) + 'px';
-                    });
-                    clip.addEventListener('mouseleave', function() {
-                        if (tooltip) tooltip.style.display = 'none';
-                    });
-                    
-                    clip.addEventListener('click', function(e) {
-                        e.stopPropagation();
-                        var card = document.getElementById('schedule-card-' + s.id);
-                        if (card) {
-                            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            var details = card.querySelector('details');
-                            if (details) details.open = true;
-                            card.classList.remove('schedule-highlight');
-                            void card.offsetWidth;
-                            card.classList.add('schedule-highlight');
-                        }
-                    });
-                    
-                    lane.appendChild(clip);
+                } else if (visualWidthPx >= 22) {
+                    var compactTime = document.createElement('span');
+                    compactTime.className = 'clip-time';
+                    compactTime.style.fontSize = '9.5px';
+                    compactTime.textContent = s.start.split(':')[0] + 'h';
+                    clip.appendChild(compactTime);
+                }
+
+                clip.addEventListener('mouseenter', function() {
+                    if (!tooltip) return;
+                    tooltip.innerHTML = '<strong>' + escapeHtml(s.title) + '</strong>' +
+                        '<div class="timeline-tooltip-row"><span>Departamento:</span> <b>' + escapeHtml(s.department_name) + '</b></div>' +
+                        '<div class="timeline-tooltip-row"><span>Horario:</span> <b>' + s.start + ' a ' + endLabel + ' (' + formatDuration(s.seconds) + ')</b></div>' +
+                        '<div class="timeline-tooltip-row"><span>Modo:</span> <span>' + (s.mode === 'moment' ? 'Aviso puntual' : 'Intervalo') + '</span></div>' +
+                        '<div class="timeline-tooltip-row"><span>Pantallas:</span> <span>' + escapeHtml(iv.targets.join(', ')) + '</span></div>';
+                    tooltip.style.display = 'block';
                 });
+                clip.addEventListener('mousemove', function(e) {
+                    if (!tooltip) return;
+                    var x = Math.min(window.innerWidth - 310, e.clientX + 14);
+                    var y = Math.min(window.innerHeight - 130, e.clientY + 14);
+                    tooltip.style.left = x + 'px';
+                    tooltip.style.top = y + 'px';
+                });
+                clip.addEventListener('mouseleave', function() {
+                    if (tooltip) tooltip.style.display = 'none';
+                });
+
+                clip.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    if (visualWidthPx < 48 && zoomIdx < 2) {
+                        setZoom(2, iv.start);
+                    }
+                    var card = document.getElementById('schedule-card-' + s.id);
+                    if (card) {
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        var details = card.querySelector('details');
+                        if (details) details.open = true;
+                        card.classList.remove('schedule-highlight');
+                        void card.offsetWidth;
+                        card.classList.add('schedule-highlight');
+                    }
+                });
+
+                lane.appendChild(clip);
             });
         });
+
+        renderDaySummary(Object.keys(uniqueDayEvents).map(function(k) { return uniqueDayEvents[k]; }));
     }
+
+    function renderDaySummary(events) {
+        if (!summaryBar) return;
+        events.sort(function(a, b) { return a.start - b.start; });
+        if (!events.length) {
+            summaryBar.innerHTML = '<span class="timeline-summary-empty">No hay anuncios programados para los filtros seleccionados en este día. Haz clic en cualquier pista para programar uno.</span>';
+            return;
+        }
+        var html = '<span class="timeline-summary-label">Resumen del día (' + events.length + '):</span>';
+        summaryBar.innerHTML = html;
+        events.forEach(function(ev) {
+            var s = ev.schedule;
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'timeline-summary-item';
+            btn.title = 'Haz clic para enfocar este anuncio en la tabla';
+            var colorBg = s.color ? s.color.bg : '#5645d4';
+            btn.innerHTML = '<span class="timeline-summary-dot" style="background:' + colorBg + '"></span>' +
+                '<span class="timeline-summary-time">' + escapeHtml(s.start) + '</span>' +
+                '<span>' + escapeHtml(s.title) + '</span>' +
+                '<small class="muted">(' + escapeHtml(s.department_name) + ')</small>';
+            btn.addEventListener('click', function() {
+                if (zoomIdx < 2) setZoom(2, ev.start);
+                else setZoom(zoomIdx, ev.start);
+                var card = document.getElementById('schedule-card-' + s.id);
+                if (card) {
+                    card.classList.remove('schedule-highlight');
+                    void card.offsetWidth;
+                    card.classList.add('schedule-highlight');
+                }
+            });
+            summaryBar.appendChild(btn);
+        });
+    }
+
+    // Zoom controls
+    if (zoomOutBtn) {
+        zoomOutBtn.addEventListener('click', function() { setZoom(zoomIdx - 1); });
+    }
+    if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', function() { setZoom(zoomIdx + 1); });
+    }
+    if (zoomLabel) {
+        zoomLabel.addEventListener('click', function() { setZoom(0, 720); });
+    }
+    if (focusBtn) {
+        focusBtn.addEventListener('click', function() {
+            var dayIdx = resolveDayIndex(currentDay);
+            var earliest = null;
+            schedules.forEach(function(s) {
+                var days = JSON.parse(s.days || '[]');
+                if (days.indexOf(String(dayIdx)) !== -1) {
+                    var m = parseMinute(s.start);
+                    if (earliest === null || m < earliest) earliest = m;
+                }
+            });
+            var targetMin = earliest !== null ? earliest : (getUtc6().getHours() * 60 + getUtc6().getMinutes());
+            var nextZoom = zoomIdx === 0 ? 2 : zoomIdx;
+            setZoom(nextZoom, targetMin);
+        });
+    }
+
+    // Ctrl + Wheel zoom on the timeline table
+    if (scrollWrap) {
+        scrollWrap.addEventListener('wheel', function(e) {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            var rect = board.getBoundingClientRect();
+            var xInLanes = Math.max(0, e.clientX - rect.left - LABEL_COL_PX);
+            var laneW = Math.max(1, board.clientWidth - LABEL_COL_PX);
+            var cursorMinute = Math.max(0, Math.min(1440, (xInLanes / laneW) * 1440));
+            if (e.deltaY < 0) setZoom(zoomIdx + 1, cursorMinute);
+            else if (e.deltaY > 0) setZoom(zoomIdx - 1, cursorMinute);
+        }, { passive: false });
+    }
+
+    window.addEventListener('resize', function() {
+        renderTimeline();
+    });
 
     document.querySelectorAll('.timeline-day-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -352,6 +612,27 @@ document.querySelectorAll('.mode').forEach(function(select){function update(){va
     }
 
     document.querySelectorAll('.timeline-track-lane').forEach(function(lane) {
+        var guide = lane.querySelector('.timeline-hover-guide');
+        var guideTime = lane.querySelector('.timeline-hover-time');
+
+        lane.addEventListener('mousemove', function(e) {
+            if (!guide || !guideTime) return;
+            if (e.target.closest('.timeline-clip')) {
+                guide.style.display = 'none';
+                return;
+            }
+            var rect = lane.getBoundingClientRect();
+            var x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+            var totalMin = Math.floor((x / rect.width) * 1440);
+            guide.style.display = 'block';
+            guide.style.left = x + 'px';
+            guideTime.textContent = '+ ' + formatMin(totalMin);
+        });
+
+        lane.addEventListener('mouseleave', function() {
+            if (guide) guide.style.display = 'none';
+        });
+
         lane.addEventListener('click', function(e) {
             if (e.target.closest('.timeline-clip')) return;
             var rect = lane.getBoundingClientRect();
@@ -385,19 +666,12 @@ document.querySelectorAll('.mode').forEach(function(select){function update(){va
             var hh = String(d.getHours()).padStart(2, '0');
             var mm = String(d.getMinutes()).padStart(2, '0');
             var ss = String(d.getSeconds()).padStart(2, '0');
-            clock.textContent = '🕒 ' + hh + ':' + mm + ':' + ss + ' (UTC-6)';
+            clock.textContent = hh + ':' + mm + ':' + ss + ' (UTC-6)';
         }
-        if (currentDay === 'today') {
-            var totalMin = d.getHours() * 60 + d.getMinutes() + (d.getSeconds() / 60);
-            var pct = (totalMin / 1440) * 100;
-            var playhead = document.getElementById('timeline-playhead');
-            if (playhead) {
-                playhead.style.display = 'block';
-                playhead.style.left = 'calc(140px + (100% - 140px) * ' + (pct / 100) + ')';
-            }
-        }
+        updatePlayheadPosition();
     }
     setInterval(updateClock, 1000);
+    renderRulerAndGrid();
     updateClock();
     renderTimeline();
 

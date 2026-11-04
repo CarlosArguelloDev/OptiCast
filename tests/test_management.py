@@ -305,6 +305,9 @@ class ManagementTests(unittest.TestCase):
         self.assertIn("timeline-tracks", html_rh)
         self.assertIn("dept-chip", html_rh)
         self.assertIn("comedor", html_rh)
+        self.assertIn("timeline-zoom-in", html_rh)
+        self.assertIn("timeline-zoom-out", html_rh)
+        self.assertNotIn("📺", html_rh)
 
         # Iniciar sesión como Calidad (usuario 3, no admin)
         self.as_user(3)
