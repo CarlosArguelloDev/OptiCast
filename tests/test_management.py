@@ -240,6 +240,58 @@ class ManagementTests(unittest.TestCase):
         with app.app_context():
             self.assertEqual(database().execute("SELECT COUNT(*) FROM accounts WHERE name='Calidad nueva'").fetchone()[0], 1)
 
+    def test_schedule_conflict_prevention(self):
+        # 1. Crear primer aviso para RH en comedor los lunes a las 10:00 por 60s
+        self.as_user(2)
+        res1 = self.upload(mode="moment", start="10:00", days=["0"], seconds="60", targets=["comedor"])
+        self.assertEqual(res1.status_code, 302)
+        with app.app_context():
+            self.assertEqual(database().execute("SELECT COUNT(*) FROM schedules").fetchone()[0], 1)
+
+        # 2. Calidad (usuario 3) intenta programar en comedor a las 10:00 los lunes -> debe rebotar
+        self.as_user(3)
+        res2 = self.upload(mode="moment", start="10:00", days=["0"], seconds="30", targets=["comedor"])
+        self.assertEqual(res2.status_code, 302)
+        panel_html = self.client.get("/panel?view=scheduled").text
+        self.assertIn("se cruza con", panel_html)
+        with app.app_context():
+            # No se debió agregar el duplicado en conflicto
+            self.assertEqual(database().execute("SELECT COUNT(*) FROM schedules").fetchone()[0], 1)
+
+        # 3. Calidad programa en extrusión (pantalla distinta) a la misma hora -> éxito
+        res3 = self.upload(mode="moment", start="10:00", days=["0"], seconds="30", targets=["extrusion"])
+        self.assertEqual(res3.status_code, 302)
+        with app.app_context():
+            self.assertEqual(database().execute("SELECT COUNT(*) FROM schedules").fetchone()[0], 2)
+
+        # 4. Calidad programa en comedor a las 10:02 (horario no cruzado) -> éxito
+        res4 = self.upload(mode="moment", start="10:02", days=["0"], seconds="30", targets=["comedor"])
+        self.assertEqual(res4.status_code, 302)
+        with app.app_context():
+            self.assertEqual(database().execute("SELECT COUNT(*) FROM schedules").fetchone()[0], 3)
+
+        # 5. Pausar el aviso de las 10:02 y verificar que si se crea otro encima, no se puede reactivar
+        with app.app_context():
+            id_1002 = database().execute("SELECT id FROM schedules WHERE start='10:02'").fetchone()[0]
+        # Pausar id_1002
+        self.client.post(f"/panel/schedules/{id_1002}", data={"csrf": "test-csrf", "action": "toggle"})
+        with app.app_context():
+            self.assertEqual(database().execute("SELECT enabled FROM schedules WHERE id=?", (id_1002,)).fetchone()[0], 0)
+
+        # Ahora RH crea uno encima a las 10:02 (se permite porque el de Calidad está pausado)
+        self.as_user(2)
+        res5 = self.upload(mode="moment", start="10:02", days=["0"], seconds="30", targets=["comedor"])
+        self.assertEqual(res5.status_code, 302)
+
+        # Ahora Calidad intenta reactivar el suyo -> debe fallar con error de conflicto
+        self.as_user(3)
+        self.client.post(f"/panel/schedules/{id_1002}", data={"csrf": "test-csrf", "action": "toggle"})
+        with app.app_context():
+            # Sigue pausado (enabled = 0)
+            self.assertEqual(database().execute("SELECT enabled FROM schedules WHERE id=?", (id_1002,)).fetchone()[0], 0)
+        panel_html = self.client.get("/panel?view=scheduled").text
+        self.assertIn("No se puede activar", panel_html)
+
 
 if __name__ == "__main__":
     unittest.main()

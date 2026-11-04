@@ -16,6 +16,97 @@ panel = Blueprint("panel", __name__)
 SCREENS = ("comedor", "crosscutter", "extrusion", "vulcas", "kalandria", "confections")
 WEEKDAYS = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 
+DEPARTMENT_COLORS = (
+    {"bg": "#0ea5e9", "border": "#0284c7", "text": "#ffffff"},  # Sky Blue
+    {"bg": "#f59e0b", "border": "#d97706", "text": "#ffffff"},  # Amber / Orange
+    {"bg": "#10b981", "border": "#059669", "text": "#ffffff"},  # Emerald Green
+    {"bg": "#8b5cf6", "border": "#7c3aed", "text": "#ffffff"},  # Violet / Purple
+    {"bg": "#f43f5e", "border": "#e11d48", "text": "#ffffff"},  # Rose / Pink
+    {"bg": "#06b6d4", "border": "#0891b2", "text": "#ffffff"},  # Cyan
+    {"bg": "#6366f1", "border": "#4f46e5", "text": "#ffffff"},  # Indigo
+    {"bg": "#eab308", "border": "#ca8a04", "text": "#ffffff"},  # Golden Yellow
+)
+
+
+def department_color(dept_name, dept_id=0):
+    idx = (int(dept_id) if dept_id else sum(ord(c) for c in str(dept_name))) % len(DEPARTMENT_COLORS)
+    return DEPARTMENT_COLORS[idx]
+
+
+def time_to_seconds(clock_str):
+    parts = clock_str.split(":")
+    return int(parts[0]) * 3600 + int(parts[1]) * 60
+
+
+def schedule_intervals(days, start, end, seconds, mode):
+    intervals = []
+    week_seconds = 7 * 86400
+    start_time_sec = time_to_seconds(start)
+    if mode == "moment":
+        duration = int(seconds)
+    else:
+        end_time_sec = time_to_seconds(end)
+        if end_time_sec > start_time_sec:
+            duration = end_time_sec - start_time_sec
+        else:
+            duration = (86400 - start_time_sec) + end_time_sec
+
+    for day_str in days:
+        d = int(day_str)
+        t_start = d * 86400 + start_time_sec
+        t_end = t_start + duration
+        if t_end > week_seconds:
+            intervals.append((t_start, week_seconds))
+            intervals.append((0, t_end - week_seconds))
+        else:
+            intervals.append((t_start, t_end))
+    return intervals
+
+
+def check_schedule_conflict(db, targets, days, start, end, seconds, mode, exclude_id=None):
+    new_intervals = schedule_intervals(days, start, end, seconds, mode)
+    query = """
+        SELECT s.*, acc.name AS department_name
+        FROM schedules s
+        JOIN accounts acc ON acc.id = s.owner
+        WHERE s.enabled = 1
+    """
+    params = []
+    if exclude_id:
+        query += " AND s.id != ?"
+        params.append(exclude_id)
+    active_schedules = db.execute(query, params).fetchall()
+
+    for other in active_schedules:
+        other_targets = set(json.loads(other["targets"]))
+        common_targets = set(targets) & other_targets
+        if not common_targets:
+            continue
+        other_days = json.loads(other["days"])
+        other_intervals = schedule_intervals(
+            other_days, other["start"], other["end"], other["seconds"], other["mode"]
+        )
+        has_conflict = False
+        conflict_point = 0
+        for (s1, e1) in new_intervals:
+            for (s2, e2) in other_intervals:
+                if max(s1, s2) < min(e1, e2):
+                    has_conflict = True
+                    conflict_point = max(s1, s2)
+                    break
+            if has_conflict:
+                break
+
+        if has_conflict:
+            day_idx = (conflict_point // 86400) % 7
+            conflict_day_name = WEEKDAYS[day_idx]
+            screen_list = ", ".join(sorted(common_targets))
+            other_title = other["title"]
+            dept = other["department_name"]
+            raise ValueError(
+                f"El horario se cruza con '{other_title}' ({dept}) en la pantalla '{screen_list}' el día {conflict_day_name}."
+            )
+
 
 def database():
     if "db" not in g:
@@ -154,7 +245,34 @@ def logout(user):
 def home(user):
     db = database()
     assets = db.execute("SELECT * FROM assets WHERE owner=? OR builtin=1 OR ?=1 ORDER BY name", (user["id"], user["admin"])).fetchall()
-    schedules = db.execute("SELECT s.*, a.name AS asset_name FROM schedules s JOIN assets a ON a.id=s.asset WHERE s.owner=? OR ?=1 ORDER BY s.start", (user["id"], user["admin"])).fetchall()
+    schedules = db.execute("""
+        SELECT s.*, a.name AS asset_name, acc.name AS department_name
+        FROM schedules s
+        JOIN assets a ON a.id=s.asset
+        JOIN accounts acc ON acc.id=s.owner
+        WHERE s.owner=? OR ?=1
+        ORDER BY s.start
+    """, (user["id"], user["admin"])).fetchall()
+
+    timeline_rows = db.execute("""
+        SELECT s.*, a.name AS asset_name, acc.name AS department_name
+        FROM schedules s
+        JOIN assets a ON a.id=s.asset
+        JOIN accounts acc ON acc.id=s.owner
+        WHERE s.enabled=1
+        ORDER BY s.start
+    """).fetchall()
+
+    timeline_items = []
+    for row in timeline_rows:
+        item = dict(row)
+        item["color"] = department_color(row["department_name"], row["owner"])
+        item["can_edit"] = bool(user["admin"] or row["owner"] == user["id"])
+        timeline_items.append(item)
+
+    dept_rows = db.execute("SELECT id, name FROM accounts ORDER BY name").fetchall()
+    departments = [{"id": r["id"], "name": r["name"], "color": department_color(r["name"], r["id"])} for r in dept_rows]
+
     view = request.args.get("view", "files")
     if view not in ("files", "carousel", "scheduled", "settings"):
         view = "files"
@@ -171,6 +289,8 @@ def home(user):
               if Path(name).suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".webm")
               and (legacy_root / name).is_file()] if legacy_root.is_dir() else []
     return render_template("panel.html", user=user, assets=assets, schedules=schedules,
+                           timeline_items=timeline_items, timeline_json=timeline_items,
+                           departments=departments, department_color=department_color,
                            view=view, screen=screen, carousel=rows, editable=editable, legacy=legacy,
                            selected_asset=request.args.get("asset", ""),
                            shifts=db.execute("SELECT * FROM shifts").fetchall(),
@@ -374,6 +494,7 @@ def insert_program(user, asset):
     if shift_id and not database().execute("SELECT 1 FROM shifts WHERE id=? AND enabled=1", (shift_id,)).fetchone():
         raise ValueError("El turno aún no está confirmado y activo.")
     title = request.form.get("title", "").strip()[:120] or asset["name"]
+    check_schedule_conflict(database(), json.loads(targets), json.loads(days), start, end, seconds, mode)
     database().execute("INSERT INTO schedules VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (
         uuid.uuid4().hex, user["id"], asset["id"], title, targets, days, start, end,
         seconds, mode, shift_id, 1))
@@ -387,6 +508,7 @@ def update_schedule(user, schedule_id):
         abort(404)
     if request.form.get("action") == "delete":
         database().execute("DELETE FROM schedules WHERE id=?", (schedule_id,))
+        flash("Programación eliminada.", "success")
     elif request.form.get("action") == "save":
         try:
             targets = selection("targets", SCREENS)
@@ -396,11 +518,23 @@ def update_schedule(user, schedule_id):
             if start == end:
                 raise ValueError("El inicio y fin deben ser diferentes.")
             seconds = duration()
+            check_schedule_conflict(database(), json.loads(targets), json.loads(days), start, end, seconds, row["mode"], exclude_id=schedule_id)
             database().execute("UPDATE schedules SET targets=?,days=?,start=?,end=?,seconds=? WHERE id=?", (targets, days, start, end, seconds, schedule_id))
+            flash("Programación actualizada.", "success")
         except ValueError as error:
             flash(str(error), "error")
     else:
-        database().execute("UPDATE schedules SET enabled=? WHERE id=?", (int(not row["enabled"]), schedule_id))
+        new_enabled = int(not row["enabled"])
+        if new_enabled:
+            try:
+                check_schedule_conflict(database(), json.loads(row["targets"]), json.loads(row["days"]), row["start"], row["end"], row["seconds"], row["mode"], exclude_id=schedule_id)
+                database().execute("UPDATE schedules SET enabled=? WHERE id=?", (new_enabled, schedule_id))
+                flash("Programación activada.", "success")
+            except ValueError as error:
+                flash(f"No se puede activar: {error}", "error")
+        else:
+            database().execute("UPDATE schedules SET enabled=? WHERE id=?", (new_enabled, schedule_id))
+            flash("Programación pausada.", "success")
     database().commit()
     return redirect(url_for("panel.home", view="scheduled"))
 
