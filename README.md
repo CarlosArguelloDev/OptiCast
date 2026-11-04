@@ -150,6 +150,11 @@ archivos propios, esos puestos se conservan.
 
 ### 3 Avisos y programados
 
+Una línea de tiempo interactiva (timeline) muestra todos los horarios ocupados por pantalla
+y departamento con rectángulos de colores diferenciados y un indicador de hora actual.
+Todas las cuentas tienen acceso visual a esta línea de tiempo para consultar la disponibilidad.
+El sistema impide automáticamente programar avisos que se crucen o solapen en una misma pantalla y día.
+
 Usar un archivo de la biblioteca o subir uno nuevo directamente. Indicar nombre,
 TVs, días, duración y unidad en segundos o minutos. Elegir una de estas opciones:
 

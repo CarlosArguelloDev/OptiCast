@@ -56,6 +56,83 @@
 
 {% elif view=='scheduled' %}
 <div class="page-title"><h1>Avisos y programados</h1><p>Publica un aviso a una hora o dentro de un intervalo.</p></div>
+
+<!-- TIMELINE DE ANUNCIOS -->
+<section class="card timeline-card">
+    <div class="timeline-header">
+        <div>
+            <h2>Línea de tiempo de programaciones</h2>
+            <p class="muted">Horarios ocupados por departamento en cada pantalla. Los anuncios no pueden cruzarse en horario.</p>
+        </div>
+        <div class="timeline-legend">
+            {% for dept in departments %}
+            <span class="dept-chip" style="--chip-bg: {{dept.color.bg}}; --chip-border: {{dept.color.border}};">
+                <span class="dept-dot"></span>{{dept.name}}
+            </span>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <div class="timeline-controls">
+        <div class="timeline-days" role="tablist" aria-label="Días de la semana">
+            <button type="button" class="timeline-day-btn active" data-day="today">Hoy</button>
+            {% for day in weekdays %}
+            <button type="button" class="timeline-day-btn" data-day="{{loop.index0}}">{{day[:3]}}</button>
+            {% endfor %}
+        </div>
+        <div class="timeline-actions">
+            <label for="timeline-screen-filter" class="sr-only">Filtrar pantalla</label>
+            <select id="timeline-screen-filter" class="timeline-screen-select">
+                <option value="all">Todas las pantallas</option>
+                {% for sc in screens %}
+                <option value="{{sc.name}}">{{sc.name|capitalize}}</option>
+                {% endfor %}
+            </select>
+            <span class="timeline-clock" id="timeline-live-clock">🕒 00:00 (UTC-6)</span>
+        </div>
+    </div>
+
+    <div class="timeline-scroll-wrap">
+        <div class="timeline-board" id="timeline-board">
+            <div class="timeline-ruler">
+                <div class="timeline-ruler-corner">Pantalla</div>
+                <div class="timeline-ruler-scale">
+                    {% for h in range(0, 25, 2) %}
+                    <span class="timeline-tick" style="left: calc({{h}} / 24 * 100%);">{{ '%02d:00' % (h % 24) }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="timeline-body-wrap">
+                <div class="timeline-playhead" id="timeline-playhead">
+                    <div class="timeline-playhead-head">▼</div>
+                    <div class="timeline-playhead-line"></div>
+                </div>
+
+                <div class="timeline-tracks" id="timeline-tracks">
+                    {% for sc in screens %}
+                    <div class="timeline-track" data-screen="{{sc.name}}">
+                        <div class="timeline-track-label">
+                            <span class="track-tv-icon">📺</span>
+                            <strong>{{sc.name|capitalize}}</strong>
+                        </div>
+                        <div class="timeline-track-lane" data-screen="{{sc.name}}" title="Haz clic en un espacio libre para programar a esa hora">
+                            <div class="timeline-grid-lines">
+                                {% for h in range(0, 24, 2) %}
+                                <div class="timeline-grid-col" style="left: calc({{h}} / 24 * 100%);"></div>
+                                {% endfor %}
+                            </div>
+                            <div class="timeline-track-items" id="lane-{{sc.name}}"></div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="timeline-tooltip" class="timeline-tooltip" style="display: none;"></div>
+</section>
+
 <div class="schedule-workspace">
 <form method="post" enctype="multipart/form-data" action="{{url_for('panel.upload')}}" class="card stack schedule-form">
 <h2>Crear programación</h2>{{f.token(csrf)}}<input type="hidden" name="intent" value="scheduled">
@@ -70,11 +147,12 @@
 {{f.days(weekdays)}}
 {% if shifts|selectattr('enabled')|list %}<div><label>Turno</label><select name="shift"><option value="">Sin restricción por turno</option>{% for shift in shifts if shift.enabled %}<option value="{{shift.id}}">{{shift.name}} · {{shift.start}}–{{shift.end}}</option>{% endfor %}</select></div>{% endif %}
 <p class="mode-help muted">El aviso ocupa la pantalla durante la duración indicada.</p>
-<button>Guardar programación</button>
+<div id="schedule-conflict-warning" class="timeline-conflict-badge"></div>
+<button id="schedule-submit-btn">Guardar programación</button>
 </form>
 <div><div class="section-heading"><h2>Mis programaciones</h2><span class="count">{{schedules|length}}</span></div>
 <div class="stack">{% for schedule in schedules %}
-<article class="card"><span class="badge {{'paused' if not schedule.enabled}}">{{'Activo' if schedule.enabled else 'Pausado'}} · {{'Aviso' if schedule.mode=='moment' else 'Intervalo'}}</span><h3>{{schedule.title}}</h3><p class="schedule-summary">{{schedule.asset_name}}<br>{{schedule.start}}{% if schedule.end %}–{{schedule.end}}{% endif %} · {{schedule.seconds}} segundos<br>{{loads(schedule.targets)|join(', ')}}<br>{% for day in loads(schedule.days) %}{{weekdays[day|int][:3]}} {% endfor %}</p>
+<article class="card" id="schedule-card-{{schedule.id}}"><span class="badge {{'paused' if not schedule.enabled}}">{{'Activo' if schedule.enabled else 'Pausado'}} · {{'Aviso' if schedule.mode=='moment' else 'Intervalo'}}</span><span class="badge" style="background: {{department_color(schedule.department_name, schedule.owner).bg}}; color: white; margin-left: 4px;">{{schedule.department_name}}</span><h3>{{schedule.title}}</h3><p class="schedule-summary">{{schedule.asset_name}}<br>{{schedule.start}}{% if schedule.end %}–{{schedule.end}}{% endif %} · {{schedule.seconds}} segundos<br>{{loads(schedule.targets)|join(', ')}}<br>{% for day in loads(schedule.days) %}{{weekdays[day|int][:3]}} {% endfor %}</p>
 <form method="post" action="{{url_for('panel.update_schedule',schedule_id=schedule.id)}}">{{f.token(csrf)}}
 <details><summary>Editar programación</summary><div class="stack detail-content">{{f.tvs(screens,loads(schedule.targets))}}{{f.days(weekdays,loads(schedule.days))}}<div class="row"><div><label>Hora de inicio</label><input name="start" type="time" value="{{schedule.start}}" required></div>{% if schedule.end %}<div><label>Hora de fin</label><input name="end" type="time" value="{{schedule.end}}" required></div>{% endif %}</div><div><label>Duración (segundos)</label><input name="seconds" type="number" min="1" max="28800" value="{{schedule.seconds}}" required></div><button name="action" value="save">Guardar cambios</button></div></details>
 <div class="actions"><button class="secondary" name="action" value="toggle" formnovalidate>{{'Pausar' if schedule.enabled else 'Activar'}}</button><button class="danger" name="action" value="delete" formnovalidate onclick="return confirm('¿Eliminar esta programación? El archivo seguirá en tu biblioteca.')">Eliminar programación</button></div>
@@ -89,5 +167,350 @@ document.querySelectorAll('input,select').forEach(function(el,n){var label=el.pr
 var source=document.querySelector('[name=source]');
 if(source){function updateSource(){var form=source.form;var uploading=source.value==='upload';form.querySelector('.upload-source').hidden=!uploading;form.querySelector('.existing-source').hidden=uploading;form.querySelector('[name=file]').required=uploading;form.querySelector('[name=file]').disabled=!uploading;form.querySelector('[name=asset]').required=!uploading;form.querySelector('[name=asset]').disabled=uploading;}source.addEventListener('change',updateSource);updateSource();}
 document.querySelectorAll('.mode').forEach(function(select){function update(){var windowMode=select.value==='window';var form=select.form;form.querySelector('.end-field').hidden=!windowMode;form.querySelector('[name=end]').required=windowMode;form.querySelector('.mode-help').textContent=windowMode?'El archivo se alterna con el carrusel entre estas horas.':'El aviso ocupa la pantalla durante la duración indicada.';}select.addEventListener('change',update);update();});
+
+{% if view == 'scheduled' %}
+(function() {
+    var schedules = {{ timeline_json|tojson }};
+    var weekdays = {{ weekdays|tojson }};
+    var currentDay = 'today';
+    
+    function getUtc6() {
+        var now = new Date();
+        var utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        return new Date(utc - (6 * 3600000));
+    }
+    
+    function resolveDayIndex(dayVal) {
+        if (dayVal === 'today') {
+            return (getUtc6().getDay() + 6) % 7;
+        }
+        return parseInt(dayVal, 10);
+    }
+    
+    function parseMinute(timeStr) {
+        if (!timeStr) return 0;
+        var p = timeStr.split(':');
+        return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+    }
+
+    var tooltip = document.getElementById('timeline-tooltip');
+
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+
+    function renderTimeline() {
+        var dayIdx = resolveDayIndex(currentDay);
+        var playhead = document.getElementById('timeline-playhead');
+        var now = getUtc6();
+        var todayIdx = (now.getDay() + 6) % 7;
+        
+        if (playhead) {
+            if (currentDay === 'today' || dayIdx === todayIdx) {
+                var totalMin = now.getHours() * 60 + now.getMinutes() + (now.getSeconds() / 60);
+                var pct = (totalMin / 1440) * 100;
+                playhead.style.display = 'block';
+                playhead.style.left = 'calc(140px + (100% - 140px) * ' + (pct / 100) + ')';
+            } else {
+                playhead.style.display = 'none';
+            }
+        }
+        
+        document.querySelectorAll('.timeline-track-items').forEach(function(el) {
+            el.innerHTML = '';
+        });
+        
+        var screenFilterEl = document.getElementById('timeline-screen-filter');
+        var filterScreen = screenFilterEl ? screenFilterEl.value : 'all';
+        document.querySelectorAll('.timeline-track').forEach(function(tr) {
+            var sc = tr.getAttribute('data-screen');
+            tr.style.display = (filterScreen === 'all' || filterScreen === sc) ? 'flex' : 'none';
+        });
+
+        schedules.forEach(function(s) {
+            var targets = JSON.parse(s.targets || '[]');
+            var days = JSON.parse(s.days || '[]');
+            var yesterdayIdx = (dayIdx + 6) % 7;
+            
+            var startsToday = days.indexOf(String(dayIdx)) !== -1;
+            var startsYesterday = days.indexOf(String(yesterdayIdx)) !== -1;
+            
+            targets.forEach(function(screen) {
+                if (filterScreen !== 'all' && filterScreen !== screen) return;
+                var lane = document.getElementById('lane-' + screen);
+                if (!lane) return;
+                
+                var intervals = [];
+                if (s.mode === 'moment') {
+                    var durMin = Math.max(0.5, s.seconds / 60);
+                    if (startsToday) {
+                        var st = parseMinute(s.start);
+                        var et = st + durMin;
+                        intervals.push({ start: st, end: Math.min(1440, et), part: 'normal' });
+                    }
+                    if (startsYesterday) {
+                        var ySt = parseMinute(s.start);
+                        var yEt = ySt + durMin;
+                        if (yEt > 1440) {
+                            intervals.push({ start: 0, end: yEt - 1440, part: 'spill' });
+                        }
+                    }
+                } else {
+                    var st = parseMinute(s.start);
+                    var et = parseMinute(s.end);
+                    var crosses = et <= st;
+                    if (startsToday) {
+                        if (crosses) {
+                            intervals.push({ start: st, end: 1440, part: 'normal' });
+                        } else {
+                            intervals.push({ start: st, end: et, part: 'normal' });
+                        }
+                    }
+                    if (startsYesterday && crosses) {
+                        intervals.push({ start: 0, end: et, part: 'spill' });
+                    }
+                }
+                
+                intervals.forEach(function(iv) {
+                    var leftPct = (iv.start / 1440) * 100;
+                    var dur = iv.end - iv.start;
+                    var widthPct = (dur / 1440) * 100;
+                    
+                    var clip = document.createElement('div');
+                    clip.className = 'timeline-clip';
+                    clip.style.left = leftPct + '%';
+                    clip.style.width = 'max(' + widthPct + '%, 38px)';
+                    clip.style.backgroundColor = s.color ? s.color.bg : '#5645d4';
+                    clip.style.borderColor = s.color ? s.color.border : '#3a2a99';
+                    
+                    var avatar = document.createElement('span');
+                    avatar.className = 'clip-avatar';
+                    avatar.textContent = s.department_name ? s.department_name.substring(0, 3) : 'AV';
+                    clip.appendChild(avatar);
+                    
+                    var title = document.createElement('strong');
+                    title.className = 'clip-title';
+                    title.textContent = s.title;
+                    clip.appendChild(title);
+                    
+                    var timeSpan = document.createElement('span');
+                    timeSpan.className = 'clip-time';
+                    timeSpan.textContent = s.start + (s.end ? '-' + s.end : '');
+                    clip.appendChild(timeSpan);
+                    
+                    clip.addEventListener('mouseenter', function() {
+                        if (!tooltip) return;
+                        tooltip.innerHTML = '<strong>' + escapeHtml(s.title) + '</strong>' +
+                            '<div class="timeline-tooltip-row"><span>Depto:</span> <b>' + escapeHtml(s.department_name) + '</b></div>' +
+                            '<div class="timeline-tooltip-row"><span>Horario:</span> <span>' + s.start + (s.end ? ' a ' + s.end : '') + ' (' + s.seconds + 's)</span></div>' +
+                            '<div class="timeline-tooltip-row"><span>Tipo:</span> <span>' + (s.mode === 'moment' ? 'Aviso (interrumpe)' : 'Intervalo') + '</span></div>' +
+                            '<div class="timeline-tooltip-row"><span>Pantallas:</span> <span>' + escapeHtml(targets.join(', ')) + '</span></div>';
+                        tooltip.style.display = 'block';
+                    });
+                    clip.addEventListener('mousemove', function(e) {
+                        if (!tooltip) return;
+                        tooltip.style.left = (e.clientX + 14) + 'px';
+                        tooltip.style.top = (e.clientY + 14) + 'px';
+                    });
+                    clip.addEventListener('mouseleave', function() {
+                        if (tooltip) tooltip.style.display = 'none';
+                    });
+                    
+                    clip.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        var card = document.getElementById('schedule-card-' + s.id);
+                        if (card) {
+                            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            var details = card.querySelector('details');
+                            if (details) details.open = true;
+                            card.classList.remove('schedule-highlight');
+                            void card.offsetWidth;
+                            card.classList.add('schedule-highlight');
+                        }
+                    });
+                    
+                    lane.appendChild(clip);
+                });
+            });
+        });
+    }
+
+    document.querySelectorAll('.timeline-day-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.timeline-day-btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            currentDay = btn.getAttribute('data-day');
+            renderTimeline();
+        });
+    });
+
+    var screenFilter = document.getElementById('timeline-screen-filter');
+    if (screenFilter) {
+        screenFilter.addEventListener('change', renderTimeline);
+    }
+
+    document.querySelectorAll('.timeline-track-lane').forEach(function(lane) {
+        lane.addEventListener('click', function(e) {
+            if (e.target.closest('.timeline-clip')) return;
+            var rect = lane.getBoundingClientRect();
+            var x = e.clientX - rect.left;
+            var pct = Math.max(0, Math.min(1, x / rect.width));
+            var totalMin = Math.floor(pct * 1440);
+            var h = String(Math.floor(totalMin / 60)).padStart(2, '0');
+            var m = String(totalMin % 60).padStart(2, '0');
+            var screen = lane.getAttribute('data-screen');
+            
+            var form = document.querySelector('.schedule-form');
+            if (form) {
+                var startInput = form.querySelector('[name=start]');
+                if (startInput) startInput.value = h + ':' + m;
+                var chk = form.querySelector('[name=targets][value="' + screen + '"]');
+                if (chk) chk.checked = true;
+                var dayIdx = resolveDayIndex(currentDay);
+                var dayChk = form.querySelector('[name=days][value="' + dayIdx + '"]');
+                if (dayChk) dayChk.checked = true;
+                
+                form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                checkFormConflict();
+            }
+        });
+    });
+
+    function updateClock() {
+        var d = getUtc6();
+        var clock = document.getElementById('timeline-live-clock');
+        if (clock) {
+            var hh = String(d.getHours()).padStart(2, '0');
+            var mm = String(d.getMinutes()).padStart(2, '0');
+            var ss = String(d.getSeconds()).padStart(2, '0');
+            clock.textContent = '🕒 ' + hh + ':' + mm + ':' + ss + ' (UTC-6)';
+        }
+        if (currentDay === 'today') {
+            var totalMin = d.getHours() * 60 + d.getMinutes() + (d.getSeconds() / 60);
+            var pct = (totalMin / 1440) * 100;
+            var playhead = document.getElementById('timeline-playhead');
+            if (playhead) {
+                playhead.style.display = 'block';
+                playhead.style.left = 'calc(140px + (100% - 140px) * ' + (pct / 100) + ')';
+            }
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+    renderTimeline();
+
+    var scheduleForm = document.querySelector('.schedule-form');
+    var conflictWarning = document.getElementById('schedule-conflict-warning');
+    var submitBtn = document.getElementById('schedule-submit-btn');
+
+    function checkFormConflict() {
+        if (!scheduleForm || !conflictWarning) return;
+        var modeSelect = scheduleForm.querySelector('[name=mode]');
+        var mode = modeSelect ? modeSelect.value : 'moment';
+        var startInput = scheduleForm.querySelector('[name=start]');
+        var endInput = scheduleForm.querySelector('[name=end]');
+        var secondsInput = scheduleForm.querySelector('[name=seconds]');
+        var unitSelect = scheduleForm.querySelector('[name=unit]');
+        
+        var start = startInput ? startInput.value : '';
+        var end = endInput ? endInput.value : '';
+        if (!start || (mode === 'window' && !end)) {
+            conflictWarning.style.display = 'none';
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+
+        var sec = parseInt(secondsInput ? secondsInput.value : 5, 10) || 5;
+        if (unitSelect && unitSelect.value === 'minutes') sec *= 60;
+        
+        var selectedTargets = [];
+        scheduleForm.querySelectorAll('[name=targets]:checked').forEach(function(c) {
+            selectedTargets.push(c.value);
+        });
+        
+        var selectedDays = [];
+        scheduleForm.querySelectorAll('[name=days]:checked').forEach(function(c) {
+            selectedDays.push(c.value);
+        });
+        
+        if (!selectedTargets.length || !selectedDays.length) {
+            conflictWarning.style.display = 'none';
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+
+        function formIntervals(days, stStr, etStr, durSec, m) {
+            var ivs = [];
+            var startSec = parseMinute(stStr) * 60;
+            var duration = m === 'moment' ? durSec : 0;
+            if (m === 'window') {
+                var endSec = parseMinute(etStr) * 60;
+                duration = endSec > startSec ? (endSec - startSec) : ((86400 - startSec) + endSec);
+            }
+            days.forEach(function(dStr) {
+                var d = parseInt(dStr, 10);
+                var s = d * 86400 + startSec;
+                var e = s + duration;
+                if (e > 604800) {
+                    ivs.push([s, 604800]);
+                    ivs.push([0, e - 604800]);
+                } else {
+                    ivs.push([s, e]);
+                }
+            });
+            return ivs;
+        }
+
+        var newIvs = formIntervals(selectedDays, start, end, sec, mode);
+        var conflictFound = null;
+
+        for (var i = 0; i < schedules.length; i++) {
+            var other = schedules[i];
+            var otherTargets = JSON.parse(other.targets || '[]');
+            var commonTargets = selectedTargets.filter(function(t) { return otherTargets.indexOf(t) !== -1; });
+            if (!commonTargets.length) continue;
+
+            var otherDays = JSON.parse(other.days || '[]');
+            var otherIvs = formIntervals(otherDays, other.start, other.end, other.seconds, other.mode);
+
+            for (var j = 0; j < newIvs.length; j++) {
+                for (var k = 0; k < otherIvs.length; k++) {
+                    var s1 = newIvs[j][0], e1 = newIvs[j][1];
+                    var s2 = otherIvs[k][0], e2 = otherIvs[k][1];
+                    if (Math.max(s1, s2) < Math.min(e1, e2)) {
+                        var pt = Math.max(s1, s2);
+                        var dIdx = Math.floor(pt / 86400) % 7;
+                        conflictFound = {
+                            title: other.title,
+                            department: other.department_name,
+                            screen: commonTargets.join(', '),
+                            day: weekdays[dIdx]
+                        };
+                        break;
+                    }
+                }
+                if (conflictFound) break;
+            }
+            if (conflictFound) break;
+        }
+
+        if (conflictFound) {
+            conflictWarning.textContent = '⚠️ Horario ocupado: Se cruza con "' + conflictFound.title + '" (' + conflictFound.department + ') en la pantalla ' + conflictFound.screen + ' el día ' + conflictFound.day + '. Elige otro horario o pantalla.';
+            conflictWarning.style.display = 'block';
+            if (submitBtn) submitBtn.disabled = true;
+        } else {
+            conflictWarning.style.display = 'none';
+            if (submitBtn) submitBtn.disabled = false;
+        }
+    }
+
+    if (scheduleForm) {
+        scheduleForm.addEventListener('input', checkFormConflict);
+        scheduleForm.addEventListener('change', checkFormConflict);
+    }
+})();
+{% endif %}
 </script>
 {% endblock %}

@@ -292,6 +292,28 @@ class ManagementTests(unittest.TestCase):
         panel_html = self.client.get("/panel?view=scheduled").text
         self.assertIn("No se puede activar", panel_html)
 
+    def test_timeline_rendered_for_all_users(self):
+        # Programar un aviso como RH
+        self.as_user(2)
+        self.upload(mode="moment", start="12:00", days=["0", "1"], seconds="45", targets=["comedor"])
+
+        # Verificar que RH ve la timeline con los departamentos y pistas
+        html_rh = self.client.get("/panel?view=scheduled").text
+        self.assertIn("Línea de tiempo de programaciones", html_rh)
+        self.assertIn("timeline-card", html_rh)
+        self.assertIn("timeline-playhead", html_rh)
+        self.assertIn("timeline-tracks", html_rh)
+        self.assertIn("dept-chip", html_rh)
+        self.assertIn("comedor", html_rh)
+
+        # Iniciar sesión como Calidad (usuario 3, no admin)
+        self.as_user(3)
+        html_calidad = self.client.get("/panel?view=scheduled").text
+        # Calidad también ve la timeline y los anuncios de RH en la timeline
+        self.assertIn("Línea de tiempo de programaciones", html_calidad)
+        self.assertIn("timeline-playhead", html_calidad)
+        self.assertIn("RH", html_calidad)
+
 
 if __name__ == "__main__":
     unittest.main()
